@@ -1,0 +1,609 @@
+{
+	"ir": {
+		"irVersion": 1,
+		"workbook": {
+			"name": "Account Summary"
+		},
+		"parameters": [
+			{
+				"id": "[Parameters].[Parameter 1]",
+				"name": "RelativeStartDate",
+				"datatype": "string",
+				"domain": "list",
+				"value": "All",
+				"members": [
+					{
+						"value": "Today"
+					},
+					{
+						"value": "Yesterday"
+					},
+					{
+						"value": "Current Week"
+					},
+					{
+						"value": "Last Week"
+					},
+					{
+						"value": "Current FP"
+					},
+					{
+						"value": "Last FP"
+					},
+					{
+						"value": "Current FQ"
+					},
+					{
+						"value": "Last FQ"
+					},
+					{
+						"value": "All"
+					}
+				]
+			},
+			{
+				"id": "[Parameters].[Parameter 2]",
+				"name": "Sort By",
+				"datatype": "string",
+				"domain": "list",
+				"value": "Days Since Start",
+				"members": [
+					{
+						"value": "Days Since Start"
+					},
+					{
+						"value": "Days Until Renewal"
+					},
+					{
+						"value": "Usage\\%"
+					},
+					{
+						"value": "TotalLicenses"
+					},
+					{
+						"value": "ARR"
+					},
+					{
+						"value": "LastActivityDate"
+					}
+				]
+			},
+			{
+				"id": "[Parameters].[Parameter 3]",
+				"name": "Asc/Desc",
+				"datatype": "string",
+				"domain": "list",
+				"value": "Asc",
+				"members": [
+					{
+						"value": "Asc"
+					},
+					{
+						"value": "Desc"
+					}
+				]
+			},
+			{
+				"id": "[Parameters].[Parameter 7]",
+				"name": "Bundled licenses",
+				"datatype": "boolean",
+				"domain": "list",
+				"value": false,
+				"members": [
+					{
+						"value": true,
+						"alias": "Include"
+					},
+					{
+						"value": false,
+						"alias": "Exclude"
+					}
+				]
+			}
+		],
+		"datasources": [
+			{
+				"id": "sqlproxy.0example0000000000000000000",
+				"caption": "Adoption",
+				"fields": [
+					{
+						"id": "[ACCOUNT_ID]",
+						"name": "Account ID",
+						"datatype": "string",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "column",
+						"caption": "Account ID",
+						"defaultAggregation": "Count"
+					},
+					{
+						"id": "[PRODUCT]",
+						"name": "Product",
+						"datatype": "string",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "column",
+						"caption": "Product",
+						"defaultAggregation": "Count"
+					},
+					{
+						"id": "[LASTRENEWALDATE]",
+						"name": "Lastrenewaldate",
+						"datatype": "date",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "column",
+						"caption": "Lastrenewaldate"
+					},
+					{
+						"id": "[AGENT_ENGAGED]",
+						"name": "Agent Engaged",
+						"datatype": "boolean",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "column",
+						"caption": "Agent Engaged",
+						"defaultAggregation": "Count"
+					},
+					{
+						"id": "[FISCAL_PERIOD_NUM]",
+						"name": "Fiscal Period Num",
+						"datatype": "integer",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "column",
+						"defaultAggregation": "Sum",
+						"caption": "Fiscal Period Num"
+					},
+					{
+						"id": "[FISCAL_QUARTER_NUM]",
+						"name": "Fiscal Quarter Num",
+						"datatype": "integer",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "column",
+						"defaultAggregation": "Sum",
+						"caption": "Fiscal Quarter Num"
+					},
+					{
+						"id": "[FISCAL_YEAR_NUM]",
+						"name": "Fiscal Year Num",
+						"datatype": "integer",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "column",
+						"defaultAggregation": "Sum",
+						"caption": "Fiscal Year Num"
+					},
+					{
+						"id": "[CURRENTFY]",
+						"name": "Currentfy",
+						"datatype": "integer",
+						"role": "dimension",
+						"type": "quantitative",
+						"kind": "column",
+						"defaultAggregation": "Sum",
+						"caption": "Currentfy"
+					},
+					{
+						"id": "[ASSIGNED_TO]",
+						"name": "Assigned To",
+						"datatype": "string",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "column",
+						"caption": "Assigned To",
+						"defaultAggregation": "Count"
+					},
+					{
+						"id": "[RECENT_AGENT_ACTIVITY_DATE]",
+						"name": "RECENT_AGENT_ACTIVITY_DATE",
+						"datatype": "date",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "column"
+					},
+					{
+						"id": "[AgentActivityCount (copy)_1804536092293087233]",
+						"name": "RecentAgentActivityDate",
+						"datatype": "date",
+						"role": "dimension",
+						"type": "quantitative",
+						"kind": "calculated",
+						"caption": "RecentAgentActivityDate",
+						"formula": "[RECENT_AGENT_ACTIVITY_DATE]"
+					},
+					{
+						"id": "[Calculation_1881660259991142401]",
+						"name": "RelativeStartDateFilter",
+						"datatype": "boolean",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "calculated",
+						"caption": "RelativeStartDateFilter",
+						"defaultAggregation": "Count",
+						"formula": "if [Parameters].[Parameter 1]='All' then TRUE\nELSEIF  [Parameters].[Parameter 1]='Today' then [DAYS_SINCE_START]=0\nELSEIF [Parameters].[Parameter 1]='Yesterday' then [DAYS_SINCE_START]=1\nELSEIF [Parameters].[Parameter 1]='Current Week' then [LASTRENEWALDATE]>=DATETRUNC('week',TODAY()) and [LASTRENEWALDATE]<=TODAY()\nELSEIF [Parameters].[Parameter 1]='Last Week' then [LASTRENEWALDATE]>= DATEADD('day',-7,DATETRUNC('week',TODAY())) and [LASTRENEWALDATE]<DATETRUNC('week',TODAY())\nELSEIF([Parameters].[Parameter 1]='Current FP' and [FISCAL_PERIOD_NUM]=[CURRENTFP] and [FISCAL_YEAR_NUM]=[CURRENTFY]) then true\nELSEIF( [Parameters].[Parameter 1]='Last FP' and ( IF [CURRENTFP]=1 then ([FISCAL_PERIOD_NUM]=12 and [FISCAL_YEAR_NUM]=[CURRENTFY]-1) else [FISCAL_PERIOD_NUM]=[CURRENTFP]-1 END )) then true\nELSEIF([Parameters].[Parameter 1]='Current FQ' and [FISCAL_QUARTER_NUM]=[CURRENTFQ] and [FISCAL_YEAR_NUM]=[CURRENTFY]) then true\nELSEIF( [Parameters].[Parameter 1]='Last FQ' and ( IF [CURRENTFQ]=1 then ([FISCAL_QUARTER_NUM]=4 and [FISCAL_YEAR_NUM]=[CURRENTFY]-1) else [FISCAL_QUARTER_NUM]=[CURRENTFQ]-1 END )) then true\nEND"
+					},
+					{
+						"id": "[Calculation_1881660261100523530]",
+						"name": "SortingField",
+						"datatype": "real",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "calculated",
+						"defaultAggregation": "Count",
+						"caption": "SortingField",
+						"formula": "if [Parameters].[Parameter 2]='TotalLicenses' then [TotalLicenses (copy)_1387671648276766720]*[Calculation_1881660261106843659]\nELSEIF [Parameters].[Parameter 2]='Usage%' then [Usage% (copy)_1387671648284012545]*[Calculation_1881660261106843659]\nELSEIF [Parameters].[Parameter 2]='Days Since Start' then [Calculation_799107516721373185]*[Calculation_1881660261106843659]\nELSEIF [Parameters].[Parameter 2]='Days Until Renewal' then [DAYS_UNTIL_RENEWAL]*[Calculation_1881660261106843659]\nELSEIF [Parameters].[Parameter 2]='ARR' then [ARR]*[Calculation_1881660261106843659]\nELSEIF [Parameters].[Parameter 2]='LastActivityDate' then DATEDIFF('day',date([AgentActivityCount (copy)_1804536092293087233]), DATE(TODAY()))*[Calculation_1881660261106843659]*-1\nEND"
+					},
+					{
+						"id": "[Calculation_1930636917600223232]",
+						"name": "AgentOutreach",
+						"datatype": "boolean",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "calculated",
+						"caption": "AgentOutreach",
+						"defaultAggregation": "Count",
+						"formula": "if [Calculation_1804536092283174912] > 0 then TRUE\nelse FALSE\nend"
+					},
+					{
+						"id": "[Calculation_306807742254063616]",
+						"name": "IsAgent",
+						"datatype": "boolean",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "calculated",
+						"caption": "IsAgent",
+						"defaultAggregation": "Count",
+						"formula": "if CONTAINS(UPPER([ASSIGNED_TO]),'AGENT A')   OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT B')     OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT C')      OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT D')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT E')        OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT F')    OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT G')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT H')     OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT I')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT J')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT K')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT L')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT M')      OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT N')    OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT O')      OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT P')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT Q')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT R')     OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT S')    OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT T')    OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT U')   OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT V')    OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT W')      OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT X')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT Y')       OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT Z')      OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT AA')        OR\n\t\tCONTAINS(UPPER([ASSIGNED_TO]),'AGENT AB')  \nthen TRUE\nEND"
+					},
+					{
+						"id": "[Calculation_653303454325510147]",
+						"name": "Usage Bucket",
+						"datatype": "string",
+						"role": "dimension",
+						"type": "nominal",
+						"kind": "calculated",
+						"caption": "Usage Bucket",
+						"defaultAggregation": "Count",
+						"formula": "if [Calculation_1284651817373192194]<=0  or ISNULL([Calculation_1284651817373192194]) then '0%'\nELSEIF  [Calculation_1284651817373192194]>0 and [Calculation_1284651817373192194]<0.2 then '(0.1-19)%' \nELSEIF  [Calculation_1284651817373192194]>=0.2 and [Calculation_1284651817373192194]<0.4 then '(20-39)%' \nELSEIF  [Calculation_1284651817373192194]>=0.4 and [Calculation_1284651817373192194]<0.6 then '(40-59)%' \nELSEIF  [Calculation_1284651817373192194]>=0.6 and [Calculation_1284651817373192194]<0.8 then '(60-79)%' \nELSEIF  [Calculation_1284651817373192194]>=0.8 and [Calculation_1284651817373192194]<=1  then '(80-100)%'\nELSEIF [Calculation_1284651817373192194]>1 then '>100%'\nEND"
+					},
+					{
+						"id": "[Calculation_799107516721373185]",
+						"name": "Days Since First Start",
+						"datatype": "integer",
+						"role": "dimension",
+						"type": "ordinal",
+						"kind": "calculated",
+						"defaultAggregation": "Count",
+						"caption": "Days Since First Start",
+						"formula": "[DAYS_SINCE_FIRST_START]"
+					},
+					{
+						"id": "[ACTIVITYCOUNT]",
+						"name": "ACTIVITYCOUNT",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ARR]",
+						"name": "ARR",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[Usage% (copy)_1387671648284012545]",
+						"name": "RawUsage%",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "RawUsage%",
+						"defaultAggregation": "Sum",
+						"formula": "IFNULL([ACTIVE_USER_COUNT] / [ACCOUNT_LICENSES],0)"
+					},
+					{
+						"id": "[CURRENTFP]",
+						"name": "Currentfp",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"caption": "Currentfp",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[CURRENTFQ]",
+						"name": "Currentfq",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"caption": "Currentfq",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[Calculation_1158832498054635522]",
+						"name": "Agent Engaged Bool to INT",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "Agent Engaged Bool to INT",
+						"defaultAggregation": "Sum",
+						"formula": "if [AGENT_ENGAGED]=TRUE then 1 else 0 END"
+					},
+					{
+						"id": "[Calculation_1284651817373192194]",
+						"name": "TotalUsage%",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "TotalUsage%",
+						"defaultAggregation": "Sum",
+						"formula": "[TotalActiveUsers(Account) (copy) (copy)_249386834018623490]/[TotalLicenses (copy)_1387671648276766720]"
+					},
+					{
+						"id": "[Calculation_1804536092283174912]",
+						"name": "AgentActivityCount",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "AgentActivityCount",
+						"defaultAggregation": "Sum",
+						"formula": "IFNULL([ACTIVITYCOUNT],0)"
+					},
+					{
+						"id": "[Calculation_1881660260044218375]",
+						"name": "# of Accounts",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "# of Accounts",
+						"formula": "IF [Parameters].[Parameter 7] then COUNTD([ACCOUNT_ID]) ELSE COUNTD(if NOT (CONTAINS([PRODUCT],'TRIAL')) then [ACCOUNT_ID] END) END"
+					},
+					{
+						"id": "[Calculation_1881660261106843659]",
+						"name": "AscendingDescendingFactor",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "AscendingDescendingFactor",
+						"defaultAggregation": "Sum",
+						"formula": "if [Parameters].[Parameter 3]='Asc' then 1\nELSE -1\nEND"
+					},
+					{
+						"id": "[DAYS_SINCE_FIRST_START]",
+						"name": "DAYS_SINCE_FIRST_START",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[DAYS_SINCE_START]",
+						"name": "Days Since Start",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"caption": "Days Since Start",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[DAYS_UNTIL_RENEWAL]",
+						"name": "Days Until Renewal",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"caption": "Days Until Renewal",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ACTIVE_USER_COUNT]",
+						"name": "Active Users",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"caption": "Active Users",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ACCOUNT_ACTIVE_USERS]",
+						"name": "ACCOUNT_ACTIVE_USERS",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ACCOUNT_LICENSES]",
+						"name": "ACCOUNT_LICENSES",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ACCOUNT_LICENSES_ALL]",
+						"name": "ACCOUNT_LICENSES_ALL",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[ACCOUNT_LICENSES_PAID]",
+						"name": "ACCOUNT_LICENSES_PAID",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "column",
+						"type": "quantitative",
+						"defaultAggregation": "Sum"
+					},
+					{
+						"id": "[TotalActiveUsers(Account) (copy) (copy)_249386834018623490]",
+						"name": "TotalActiveUsers(Account) ",
+						"datatype": "integer",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "TotalActiveUsers(Account) ",
+						"defaultAggregation": "Sum",
+						"formula": "IFNULL([ACCOUNT_ACTIVE_USERS],0)"
+					},
+					{
+						"id": "[TotalLicenses (copy)_1387671648276766720]",
+						"name": "TotalLicenses(Account)",
+						"datatype": "real",
+						"role": "measure",
+						"kind": "calculated",
+						"type": "quantitative",
+						"caption": "TotalLicenses(Account)",
+						"defaultAggregation": "Sum",
+						"formula": "CASE [Parameters].[Parameter 7] WHEN TRUE THEN [ACCOUNT_LICENSES_ALL]\nELSE [ACCOUNT_LICENSES_PAID] END"
+					}
+				]
+			}
+		],
+		"worksheets": [],
+		"dashboards": []
+	},
+	"dataset": {
+		"key": "cts.ds",
+		"name": "Adoption",
+		"cardTarget": true,
+		"datasourceId": "sqlproxy.0example0000000000000000000",
+		"strategy": "upload",
+		"fieldMap": {
+			"[ACCOUNT_ID]": "Account ID",
+			"[PRODUCT]": "Product",
+			"[LASTRENEWALDATE]": "Lastrenewaldate",
+			"[AGENT_ENGAGED]": "Agent Engaged",
+			"[FISCAL_PERIOD_NUM]": "Fiscal Period Num",
+			"[FISCAL_QUARTER_NUM]": "Fiscal Quarter Num",
+			"[FISCAL_YEAR_NUM]": "Fiscal Year Num",
+			"[CURRENTFY]": "Currentfy",
+			"[ASSIGNED_TO]": "Assigned To",
+			"[RECENT_AGENT_ACTIVITY_DATE]": "RECENT_AGENT_ACTIVITY_DATE",
+			"[ACTIVITYCOUNT]": "ACTIVITYCOUNT",
+			"[ARR]": "ARR",
+			"[CURRENTFP]": "Currentfp",
+			"[CURRENTFQ]": "Currentfq",
+			"[DAYS_SINCE_FIRST_START]": "DAYS_SINCE_FIRST_START",
+			"[DAYS_SINCE_START]": "Days Since Start",
+			"[DAYS_UNTIL_RENEWAL]": "Days Until Renewal",
+			"[ACTIVE_USER_COUNT]": "Active Users",
+			"[ACCOUNT_ACTIVE_USERS]": "ACCOUNT_ACTIVE_USERS",
+			"[ACCOUNT_LICENSES]": "ACCOUNT_LICENSES",
+			"[ACCOUNT_LICENSES_ALL]": "ACCOUNT_LICENSES_ALL",
+			"[ACCOUNT_LICENSES_PAID]": "ACCOUNT_LICENSES_PAID"
+		},
+		"schema": [
+			{
+				"name": "Account ID",
+				"type": "STRING"
+			},
+			{
+				"name": "Product",
+				"type": "STRING"
+			},
+			{
+				"name": "Lastrenewaldate",
+				"type": "DATE"
+			},
+			{
+				"name": "Agent Engaged",
+				"type": "STRING"
+			},
+			{
+				"name": "Fiscal Period Num",
+				"type": "LONG"
+			},
+			{
+				"name": "Fiscal Quarter Num",
+				"type": "LONG"
+			},
+			{
+				"name": "Fiscal Year Num",
+				"type": "LONG"
+			},
+			{
+				"name": "Currentfy",
+				"type": "LONG"
+			},
+			{
+				"name": "Assigned To",
+				"type": "STRING"
+			},
+			{
+				"name": "RECENT_AGENT_ACTIVITY_DATE",
+				"type": "DATE"
+			},
+			{
+				"name": "ACTIVITYCOUNT",
+				"type": "LONG"
+			},
+			{
+				"name": "ARR",
+				"type": "DOUBLE"
+			},
+			{
+				"name": "Currentfp",
+				"type": "LONG"
+			},
+			{
+				"name": "Currentfq",
+				"type": "LONG"
+			},
+			{
+				"name": "DAYS_SINCE_FIRST_START",
+				"type": "LONG"
+			},
+			{
+				"name": "Days Since Start",
+				"type": "LONG"
+			},
+			{
+				"name": "Days Until Renewal",
+				"type": "LONG"
+			},
+			{
+				"name": "Active Users",
+				"type": "LONG"
+			},
+			{
+				"name": "ACCOUNT_ACTIVE_USERS",
+				"type": "LONG"
+			},
+			{
+				"name": "ACCOUNT_LICENSES",
+				"type": "DOUBLE"
+			},
+			{
+				"name": "ACCOUNT_LICENSES_ALL",
+				"type": "DOUBLE"
+			},
+			{
+				"name": "ACCOUNT_LICENSES_PAID",
+				"type": "DOUBLE"
+			}
+		]
+	}
+}

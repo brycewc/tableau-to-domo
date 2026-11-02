@@ -1,0 +1,227 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<!-- Dashboards, actions, a story and styles copied from site workbooks (names changed) for the App Studio phase 2 tests.
+     Worksheets are left empty: tests build their cards from cards.fixtures.test.js sheets of the same names. -->
+<workbook source-build='2023.3.0 (20233.23.1017.0948)' version='18.1'>
+  <preferences>
+    <color-palette name='Brand' type='regular'>
+      <color>#4e79a7</color>
+      <color>#f28e2b</color>
+    </color-palette>
+  </preferences>
+  <style>
+    <style-rule element='all'>
+      <format attr='font-family' value='Georgia' />
+      <format attr='color' value='#333333' />
+    </style-rule>
+  </style>
+  <actions>
+    <action caption='Filter by Account' name='[Action14]'>
+      <activation auto-clear='true' type='on-select' />
+      <source dashboard='Tracking' type='sheet' worksheet='Accounts' />
+      <command command='tsc:tsl-filter'>
+        <param name='exclude' value='Pipeline' />
+        <param name='on-empty' value='none' />
+        <param name='special-fields' value='all' />
+        <param name='target' value='Tracking' />
+      </command>
+    </action>
+    <action caption='To Trend' name='[Action2]'>
+      <activation auto-clear='true' type='on-select' />
+      <source dashboard='Tracking' type='sheet' worksheet='Pipeline' />
+      <link caption='To Trend' delimiter=',' escape='\' expression='tsl:Account%20Detail?%5Bfederated.abc%5D.%5BRegion%5D~s0=&lt;[federated.abc].[none:Region:nk]~na&gt;' include-null='true' multi-select='true' url-escape='true' />
+      <command command='tsc:tsl-filter'>
+        <param name='on-empty' value='none' />
+        <param name='target' value='Account Detail' />
+      </command>
+    </action>
+    <action caption='Go to Account in CRM' name='[Action15]'>
+      <source dashboard='Tracking' type='sheet' worksheet='Pipeline' />
+      <link caption='Go to Account' expression='https://&lt;[Parameters].[Parameter 2]&gt;/r/Account/&lt;[Id (Account)]&gt;/view' url-escape='true'>
+        <url-action-type>browser</url-action-type>
+      </link>
+    </action>
+    <action caption='Email Owner' name='[Action16]'>
+      <source datasource='federated.abc' type='datasource' />
+      <link caption='' delimiter=';' escape='\' expression='mailto:&lt;[Email]&gt;' include-null='true' multi-select='true' />
+    </action>
+    <action caption='Highlight Region' name='[Action17]'>
+      <activation auto-clear='true' type='on-select' />
+      <source dashboard='Tracking' type='sheet' worksheet='Accounts' />
+      <command command='tsc:brush'>
+        <param name='field-captions' value='Region' />
+        <param name='target' value='Tracking' />
+      </command>
+    </action>
+    <nav-action caption='Open Detail' name='[Action46_2708]'>
+      <activation type='on-select' />
+      <source dashboard='Account Detail' type='sheet' worksheet='Trend' />
+      <params>
+        <param name='sheet' value='Tracking' />
+      </params>
+    </nav-action>
+    <edit-parameter-action caption='Pick Region' name='[Action6_25A1]'>
+      <activation type='on-select' />
+      <source dashboard='Account Detail' type='sheet' worksheet='Region Map' />
+      <agg-type type='max' />
+      <clear-option type='assign-fixed-value' value='s:East' />
+      <params>
+        <param name='source-field' value='[federated.abc].[none:Region:nk]' />
+        <param name='target-parameter' value='[Parameters].[Parameter 1]' />
+      </params>
+    </edit-parameter-action>
+  </actions>
+  <datasources>
+    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
+      <column caption='Region Pick' datatype='string' name='[Parameter 1]' param-domain-type='list' role='measure' type='nominal' value='&quot;East&quot;'>
+        <calculation class='tableau' formula='&quot;East&quot;' />
+      </column>
+      <column caption='CRM Host' datatype='string' name='[Parameter 2]' param-domain-type='all' role='measure' type='nominal' value='&quot;crm.example.com&quot;'>
+        <calculation class='tableau' formula='&quot;crm.example.com&quot;' />
+      </column>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Accounts' />
+    <worksheet name='Pipeline' />
+    <worksheet name='Trend' />
+    <worksheet name='Region Map' />
+  </worksheets>
+  <dashboards>
+    <dashboard name='Tracking'>
+      <size maxheight='800' maxwidth='1200' minheight='800' minwidth='1200' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='2' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='100000' id='3' param='vert' type-v2='layout-flow' w='100000' x='0' y='0'>
+            <zone h='6000' id='4' param='horz' type-v2='layout-flow' w='100000' x='0' y='0'>
+              <zone fixed-size='36' h='6000' id='1089' is-fixed='true' type-v2='dashboard-object' w='25000' x='0' y='0'>
+                <button action='tabdoc:goto-sheet window-id=&quot;{799C3844-5C50-413E-BD06-D1E5333513C7}&quot;' button-type='text'>
+                  <button-visual-state>
+                    <caption>Account Detail</caption>
+                    <button-caption-font-style bold='true' fontcolor='#ffffff' fontname='Verdana' fontsize='8' />
+                    <format attr='background-color' value='#4e79a7' />
+                    <format attr='border-style' value='solid' />
+                    <format attr='border-width' value='1' />
+                    <format attr='border-color' value='#000000' />
+                  </button-visual-state>
+                </button>
+              </zone>
+              <zone h='6000' id='1090' type-v2='dashboard-object' w='25000' x='25000' y='0'>
+                <button action='tabdoc:goto-sheet window-id=&quot;{4767BE2C-289F-4C5B-8138-49C550550453}&quot;' button-type='text'>
+                  <button-visual-state>
+                    <caption>Retired Summary</caption>
+                  </button-visual-state>
+                </button>
+              </zone>
+            </zone>
+            <zone h='47000' id='5' name='Accounts' w='50000' x='0' y='6000' />
+            <zone h='47000' id='6' name='Pipeline' w='50000' x='50000' y='6000' />
+            <zone forceUpdate='true' h='47000' id='63' type-v2='text' w='50000' x='0' y='53000'>
+              <formatted-text>
+                <run bold='true' fontalignment='1' fontname='Georgia' fontsize='18'>Data Consistency Warning</run>
+                <run fontalignment='1'>Æ&#10;</run>
+                <run fontalignment='1' fontname='Georgia' fontcolor='#333333'>Please validate before use.</run>
+              </formatted-text>
+            </zone>
+          </zone>
+        </zone>
+        <zone h='3125' id='64' type-v2='dashboard-object' w='1757' x='97804' y='54000'>
+          <button action=''>
+            <toggle-action>tabdoc:toggle-button-click-action window-id=&quot;{FE5D40F6-63E8-4786-AD08-BB36D0D1A264}&quot; zone-id=&quot;64&quot; zone-ids=[63]</toggle-action>
+            <button-visual-state />
+            <button-visual-state />
+          </button>
+        </zone>
+      </zones>
+      <simple-id uuid='{11111111-63E8-4786-AD08-BB36D0D1A264}' />
+    </dashboard>
+    <dashboard name='Account Detail'>
+      <style>
+        <style-rule element='table'>
+          <format attr='background-color' value='#f9f9f9' />
+        </style-rule>
+      </style>
+      <size maxheight='800' maxwidth='1200' minheight='800' minwidth='1200' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='2' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='100000' id='10' name='Trend' w='60000' x='0' y='0'>
+            <zone-style>
+              <format attr='border-color' value='#d4d4d4' />
+              <format attr='border-style' value='solid' />
+              <format attr='border-width' value='1' />
+            </zone-style>
+          </zone>
+          <zone h='100000' id='11' name='Region Map' w='40000' x='60000' y='0'>
+            <zone-style>
+              <format attr='border-color' value='#d4d4d4' />
+              <format attr='border-style' value='solid' />
+              <format attr='border-width' value='1' />
+            </zone-style>
+          </zone>
+        </zone>
+        <zone friendly-name='Filters Panel' h='40000' hidden-by-user='true' id='20' is-floating='true' param='vert' type-v2='layout-flow' w='30000' x='70000' y='10000'>
+          <zone h='20000' id='21' type-v2='text' w='30000' x='70000' y='10000'>
+            <formatted-text>
+              <run>Pick a region on the map</run>
+            </formatted-text>
+          </zone>
+          <zone h='20000' id='22' name='Pipeline' w='30000' x='70000' y='30000' />
+        </zone>
+        <zone h='3000' id='23' type-v2='dashboard-object' w='3000' x='97000' y='5000'>
+          <button action='' active-visual-state-index='1'>
+            <toggle-action>tabdoc:toggle-button-click-action window-id=&quot;{BC07A3EF-F2E9-4AB1-AC11-A310CAF1CDA1}&quot; zone-id=&quot;23&quot; zone-ids=[20]</toggle-action>
+            <button-visual-state>
+              <image-path>Image/switch-right.png</image-path>
+            </button-visual-state>
+            <button-visual-state>
+              <image-path>Image/switch-left.png</image-path>
+            </button-visual-state>
+          </button>
+        </zone>
+      </zones>
+      <simple-id uuid='{22222222-63E8-4786-AD08-BB36D0D1A264}' />
+    </dashboard>
+    <dashboard name='Account Story' type='storyboard'>
+      <size maxheight='1000' maxwidth='1100' minheight='1000' minwidth='1100' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='2' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='98400' id='1' param='vert' removable='false' type-v2='layout-flow' w='98546' x='727' y='800'>
+            <zone fixed-size='60' h='6000' id='3' is-fixed='true' type-v2='title' w='98546' x='727' y='800' />
+            <zone h='80200' id='5' paired-zone-id='4' removable='false' type-v2='flipboard' w='98546' x='727' y='19000'>
+              <flipboard active-id='1' nav-type='caption' show-nav-arrows='true'>
+                <story-points>
+                  <story-point caption='1.Summary' captured-sheet='Trend' id='1'>
+                    <capturedDeltas>
+                      <worksheet name='Trend'>
+                        <annotations>
+                          <annotation class='point' delta-type='added' id='0' mark-position='1' pullback='12' text-width='361'>
+                            <formatted-text>
+                              <run bold='true'>Total AR Outstanding</run>
+                            </formatted-text>
+                          </annotation>
+                        </annotations>
+                      </worksheet>
+                    </capturedDeltas>
+                  </story-point>
+                  <story-point caption='2. Contract Type, Billing Frequency and the Channel Distribution of Open Balances' captured-sheet='Account Detail' id='2' />
+                  <story-point caption='3. Trend again' captured-sheet='Trend' id='3' />
+                </story-points>
+              </flipboard>
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{33333333-63E8-4786-AD08-BB36D0D1A264}' />
+    </dashboard>
+  </dashboards>
+  <windows source-height='114'>
+    <window class='dashboard' name='Tracking'>
+      <simple-id uuid='{11111111-63E8-4786-AD08-BB36D0D1A264}' />
+    </window>
+    <window class='dashboard' hidden='true' name='Account Detail'>
+      <simple-id uuid='{799C3844-5C50-413E-BD06-D1E5333513C7}' />
+    </window>
+    <window class='storyboard' name='Account Story'>
+      <simple-id uuid='{33333333-63E8-4786-AD08-BB36D0D1A264}' />
+    </window>
+  </windows>
+</workbook>

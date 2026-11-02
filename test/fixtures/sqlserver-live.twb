@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Cases' inline='true' name='federated.abc' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='dw' name='sqlserver.1'>
+            <connection authentication='sspi' class='sqlserver' dbname='SUPPORT' server='dw' username='svc_tab' password='hunter2' />
+          </named-connection>
+        </named-connections>
+        <relation connection='sqlserver.1' name='Cases' table='[dbo].[Cases]' type='table' />
+      </connection>
+      <column datatype='string' name='[Status]' role='dimension' type='nominal' />
+      <column datatype='integer' name='[Count]' role='measure' type='quantitative' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Sheet 1'>
+      <table>
+        <view>
+          <datasources><datasource caption='Cases' name='federated.abc' /></datasources>
+          <datasource-dependencies datasource='federated.abc'>
+            <column datatype='string' name='[Status]' role='dimension' type='nominal' />
+            <column-instance column='[Status]' derivation='None' name='[none:Status:nk]' pivot='key' type='nominal' />
+          </datasource-dependencies>
+        </view>
+        <rows>[federated.abc].[none:Status:nk]</rows>
+        <cols />
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>

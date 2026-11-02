@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+t2d-work*/
+logs/
+tmp/
+.venv/
+__pycache__/
+.claude/settings.local.json
+CLAUDE.local.md
+docs/research/
