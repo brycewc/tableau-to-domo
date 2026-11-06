@@ -85,6 +85,7 @@ export const ISSUE_TEXT = {
 	'data.view-sql-rewrite': { text: "CTEs or UNPIVOT in Custom SQL were rewritten for Domo's SQL view parser" },
 	'data.initial-sql-inlined': { text: "Snowflake Initial SQL temp tables were carried into the Custom SQL, so the data is served live through SQL DataSet Views; check the views' results" },
 	'data.initial-sql-inline-unsupported': { text: 'Snowflake Initial SQL could not become SQL DataSet Views; it keeps the Magic ETL or snapshot path' },
+	'data.fixed-filters-in-dataflow': { text: 'Fixed "all worksheets" datasource filters run in the joins dataflow, as Tableau applies them before any sheet' },
 	'data.initial-sql-magic': { text: 'Snowflake Initial SQL runs as a Magic ETL dataflow on the warehouse over Cloud Amplifier tables; check its outputs against Tableau' },
 	'data.initial-sql-magic-blocked': { text: 'Snowflake Initial SQL could not become a Magic ETL dataflow; the data stays a snapshot' },
 	'data.initial-sql-magic-columns': { text: 'An Initial SQL dataflow output has no known columns until it first runs' },

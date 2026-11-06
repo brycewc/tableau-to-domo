@@ -1,4 +1,5 @@
-import { slugify } from '../util/ids.js';
+import { shortHash, slugify } from '../util/ids.js';
+import { fixedDatasourceFilters, fixedFilterCondition } from './fixed-filters.js';
 import { ref } from '../util/refs.js';
 import { dedupeNames, domoColumnName, stripBrackets } from '../model/naming.js';
 import { tableauToDomoType } from './schema.js';
@@ -788,26 +789,56 @@ export function planDatasets(ir, manifests, { mappings = {}, options = {}, workb
 			}
 		}
 		if (!result) {
-			const dataflowKey = dsKey;
 			const flow = buildJoinDataflow({ name: `${name} (Tableau joins)`, outputName: name, description, inputs: joinInputs, tree });
 			issues.push(...flow.issues);
+			const fieldMap = joinedFieldMap(effective, inputsById, flow, mappings, issues);
+			const fixed = fixedDatasourceFilters(ir, ds)
+				.map((f) => fixedFilterCondition(f, { ...effective, fields: ds.fields ?? effective.fields }, fieldMap))
+				.filter(Boolean);
+			let key = dsKey;
+			let outputName = name;
+			if (fixed.length) {
+				const conditions = fixed.map((f) => `(${f.expression})`);
+				key = `${dsKey}.filtered-${shortHash(conditions)}`;
+				outputName = `${name} (fixed filters)`;
+				const publish = flow.definition.actions.find((a) => a.type === 'PublishToVault');
+				const filterId = 'fixed-datasource-filters';
+				flow.definition.actions.splice(flow.definition.actions.indexOf(publish), 0, {
+					type: 'Filter',
+					id: filterId,
+					name: 'Fixed datasource filters',
+					dependsOn: publish.dependsOn,
+					filterList: [{ expression: conditions.join(' AND '), andFilterList: [] }],
+					gui: { x: (publish.gui?.x ?? 0) - 110, y: (publish.gui?.y ?? 0) + 120 }
+				});
+				publish.dependsOn = [filterId];
+				publish.name = outputName;
+				if (publish.dataSource) publish.dataSource = { ...publish.dataSource, name: outputName };
+				flow.definition.name = `${outputName} (Tableau joins)`;
+				issues.push({
+					severity: 'info',
+					code: 'data.fixed-filters-in-dataflow',
+					message: `The joins dataflow of '${caption}' applies its fixed "all worksheets" filter(s) ${fixed.map((f) => f.field).join(', ')} right after the joins, as Tableau applies them before any sheet, so the joined rows stay as few as Tableau's. This workbook gets its own copy of the dataset.`,
+					object
+				});
+			}
 			dataflows.push({
-				key: dataflowKey,
+				key,
 				name: flow.definition.name,
 				definition: flow.definition,
-				outputDatasetKeys: [dsKey],
+				outputDatasetKeys: [key],
 				runAfterCreate: true
 			});
 			datasets.push({
-				key: dsKey,
-				name,
+				key,
+				name: outputName,
 				description,
 				strategy: 'dataflow-output',
 				schema: flow.columns,
-				dataflowOutput: { dataflowKey, outputName: name },
+				dataflowOutput: { dataflowKey: key, outputName },
 				datasourceId: ds.id,
 				cardTarget: true,
-				fieldMap: joinedFieldMap(effective, inputsById, flow, mappings, issues)
+				fieldMap
 			});
 		}
 	}
