@@ -25,6 +25,32 @@ export async function createCard(c, body, { pageId, retries = CARD_RETRIES } = {
 	return { id, urn: String(res?.urn ?? id), response: res };
 }
 
+const UNSENT_ERROR_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+// Server clocks and ours can differ; a card created this long before the request started still counts.
+const CREATED_SKEW_MS = 5 * 60 * 1000;
+
+// apiContent answers 500 when icebox times out saving a card's formulas, sometimes after it saved the card.
+export function mayHaveCreated(err) {
+	if (typeof err?.status === 'number') return err.status >= 500;
+	return !UNSENT_ERROR_CODES.has(err?.cause?.code ?? err?.code);
+}
+
+export async function listPageCards(c, pageId) {
+	const res = await c.get(`/content/v1/pages/${encodeURIComponent(pageId)}/cards`);
+	return Array.isArray(res) ? res : [];
+}
+
+// A card a failed create saved anyway: titled one of `titles`, created since `since` (ms), id not in `known`.
+// Throws when several match.
+export async function findCreatedCard(c, { pageId, titles, since, known }) {
+	const squash = (s) => String(s ?? '').replace(/\s+/g, '');
+	const wanted = new Set(titles.filter(Boolean).map(squash));
+	const createdMs = (card) => (typeof card.created === 'number' ? (card.created < 1e11 ? card.created * 1000 : card.created) : undefined);
+	const matches = (await listPageCards(c, pageId)).filter((card) => card?.id != null && !known.has(String(card.id)) && wanted.has(squash(card.title)) && createdMs(card) >= since - CREATED_SKEW_MS);
+	if (matches.length > 1) throw new Error(`${matches.length} cards titled "${titles[0]}" were created on page ${pageId} (ids ${matches.map((m) => m.id).join(', ')}), so which one this push created is unknown; delete the extra ones in Domo and push again`);
+	return matches.length ? { id: Number(matches[0].id) } : undefined;
+}
+
 /**
  * Replace an Analyzer card definition.
  * @param {import('./client.js').DomoClient} c

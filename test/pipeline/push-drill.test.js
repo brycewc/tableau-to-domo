@@ -131,6 +131,36 @@ test('a drill view deleted in Domo is created again; a view someone else added s
 	assert.deepEqual(paths.get(root), [9999, 4001]);
 });
 
+test('a drill view create answered with HTTP 500 that Domo saved anyway is recovered, not created twice; an older view is never taken', async () => {
+	const { ws, config } = await setup();
+	const paths = new Map();
+	await pushPlan({ config, slug: 'sales', deps: drillDomo(paths).deps, plan: withDrill([]), emitter: quiet });
+	const root = String((await loadState(ws, 'acme')).objects['card:sheet-1'].id);
+	paths.set(root, [9999]);
+	const serverError = () => Object.assign(new Error('HTTP 500: Unable to create card'), { status: 500 });
+	const stub = drillDomo(paths);
+	const create = stub.deps.cards.createDrillView;
+	stub.deps.cards.mayHaveCreated = (err) => err.status >= 500;
+	stub.deps.cards.createDrillView = async (...args) => {
+		await create(...args);
+		throw serverError();
+	};
+	const result = await pushPlan({ config, slug: 'sales', deps: stub.deps, plan: withDrill(['State']), emitter: quiet });
+	assert.deepEqual(names(stub.calls), ['createDrillView', 'updateDrillView']);
+	assert.equal(stub.calls.find((c) => c.name === 'updateDrillView').args.drillId, 4001);
+	assert.deepEqual((await drillEntries(ws)).map((e) => e.id), [4001]);
+	assert.match(result.actions.find((a) => a.key === 'sheet-1').notes.join(' '), /recovered it/);
+
+	const lost = drillDomo(paths);
+	lost.deps.cards.mayHaveCreated = () => true;
+	lost.deps.cards.createDrillView = async () => {
+		throw serverError();
+	};
+	const failed = await pushPlan({ config, slug: 'sales', deps: lost.deps, plan: withDrill(['City']), emitter: quiet });
+	assert.ok(!lost.calls.some((c) => c.name === 'updateDrillView'), 'the view someone else added is left alone');
+	assert.ok(failed.issues.some((i) => i.code === 'push.card-drill-path' && /HTTP 500/.test(i.message)));
+});
+
 test('dry run describes the drill views without writing them', async () => {
 	const { config } = await setup();
 	const stub = drillDomo();

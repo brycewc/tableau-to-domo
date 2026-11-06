@@ -163,7 +163,7 @@ test('on an app, an action that targets a section sheet reaches the merged card'
 	assert.deepEqual(bars.interaction.config.selectedCardUrns, [{ $ref: `card:${result.cards[0].key}`, field: 'urn' }]);
 });
 
-test('the section rows beast mode reads the cloned beast modes', () => {
+test('the section rows beast mode inlines the beast modes its conditions reference', () => {
 	const FLAG_ID = 'calculation_00000000-0000-5000-8000-000000000003';
 	const ir = stackIr();
 	const main = ir.worksheets.find((w) => w.name === 'Dyn Main');
@@ -177,9 +177,8 @@ test('the section rows beast mode reads the cloned beast modes', () => {
 	const data = { datasets: [{ key: DATASET, name: 'Orders', strategy: 'upload', schema: [], fieldMap: {}, datasourceId: DS, cardTarget: true }], dataflows: [], beastModes: [beastMode('Opening', OPEN_ID), beastMode('Ending', END_ID), { ...beastMode('Flag', FLAG_ID), expression }] };
 	planCrosstabStacks(ir, cards, data, { workbookKey: 'wb' });
 	const keep = data.beastModes.find((bm) => bm.key.endsWith('.stack-rows'));
-	const ending = data.beastModes.find((bm) => bm.name === 'Ending' && bm.datasetKey === keep.datasetKey);
-	assert.ok(keep.expression.includes(`DOMO_BEAST_MODE(${ending.legacyId})`), keep.expression);
-	assert.ok(!keep.expression.includes(END_ID));
+	assert.ok(keep.expression.includes(`(CASE WHEN ('Ending') = 'Ending' THEN 'x' END) IN ('x')`), keep.expression);
+	assert.ok(!keep.expression.includes('DOMO_BEAST_MODE'), keep.expression);
 });
 
 test('a dashboard filter shown on one section and a fixed copy on the others stays one card filter the view default can replace', () => {

@@ -143,19 +143,30 @@ export function filterDataType(binding) {
 	return 'string';
 }
 
+// apiContent saves card formulas through icebox with a 60 s read timeout; an 81 KB inlined calc took icebox ~80 s.
+export const REFERENCED_EXPRESSION_CHARS = 8192;
+
+const BEAST_MODE_REFERENCE = /DOMO_BEAST_MODE\((calculation_[\w-]+)\)/g;
+
 /**
- * Beast Mode SQL operand for a binding: a backticked column or the formula's own expression.
- * @param {FieldBinding} binding
+ * Beast Mode SQL operand for a binding: a column, the formula's expression, or `DOMO_BEAST_MODE(<legacyId>)` when long.
+ * `inline` keeps the expression, for SQL saved as a dataset Beast Mode (push does not point one Beast Mode at another).
  * @returns {string|undefined}
  */
-export function bindingExpression(binding) {
+export function bindingExpression(binding, { inline = false } = {}) {
 	if (!binding) return undefined;
 	if (binding.kind === 'column') return `\`${binding.column}\``;
 	if (binding.kind === 'formula') {
 		if (binding.aggregated) return undefined;
-		return binding.expression ? `(${binding.expression})` : `\`${binding.formulaId}\``;
+		if (!binding.expression) return `\`${binding.formulaId}\``;
+		if (!inline && binding.formulaId && binding.expression.length >= REFERENCED_EXPRESSION_CHARS) return `DOMO_BEAST_MODE(${binding.formulaId})`;
+		return `(${binding.expression})`;
 	}
 	return undefined;
+}
+
+export function inlineBeastModeReferences(text, byLegacyId) {
+	return String(text).replace(BEAST_MODE_REFERENCE, (m, legacyId) => (byLegacyId.has(legacyId) ? `(${byLegacyId.get(legacyId).expression})` : m));
 }
 
 /**
@@ -679,7 +690,7 @@ export function aggregateFilterField(filter, binding) {
 		if (binding.lodExpression && outer && derivation !== 'sum') return build(outer, binding.lodExpression);
 		return { binding };
 	}
-	const expr = bindingExpression(binding);
+	const expr = bindingExpression(binding, { inline: true });
 	if (!expr) return { problem: 'formula' };
 	const outer = HAVING_FORMULAS[derivation] ?? HAVING_AGGREGATIONS[derivation];
 	if (outer) return build(outer, expr, derivation === 'attribute' || derivation === 'attr' ? 'ATTR is approximated with MAX' : undefined);

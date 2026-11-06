@@ -2,6 +2,7 @@ import { ref } from '../util/refs.js';
 import { beastModeLegacyId, slugify } from '../util/ids.js';
 import { refreshesOnUpdate } from './etl.js';
 import { buildCardBody } from './cards.js';
+import { inlineBeastModeReferences } from './filters.js';
 
 /**
  * Crosstabs stacked on a dashboard as one table (Tableau's "Dyn Open / Dyn Main / Dyn End" waterfall tables: one tiled
@@ -329,7 +330,7 @@ function mergeStack(stack, ctx, { datasetKey, keepLegacyId, rewrite, title }) {
 		filters.push(...fixed);
 		return { pillId: copy.pillId, default: copy.default, filters: fixed };
 	});
-	const keep = conditions.some((c) => c !== "'true'") ? rewrite(sectionCase(conditions, { fallback: "'false'" })) : undefined;
+	const keep = conditions.some((c) => c !== "'true'") ? rewrite(inlineBeastModeReferences(sectionCase(conditions, { fallback: "'false'" }), ctx.beastModes)) : undefined;
 	if (keep) filters.push({ column: keepLegacyId, operand: 'IN', values: ['true'], dataType: 'string' });
 
 	// Phoenix lists pivot row members as they first appear in the query rows, so sections and their own sorts go first.

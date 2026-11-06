@@ -199,14 +199,30 @@ export function overrideConfiguration(configuration, overrides) {
 	return out;
 }
 
-/** Remove array items that reference one of `legacyIds` through `formulaId`, or `column` (beast mode filters). Returns [copy, removedCount]. */
+const BEAST_MODE_REFERENCE = /DOMO_BEAST_MODE\(([^()\s]+)\)/g;
+const referencedBeastModes = (text) => [...String(text).matchAll(BEAST_MODE_REFERENCE)].map((m) => m[1]);
+
+/**
+ * Remove array items that reference one of `legacyIds` through `formulaId`, or `column` (beast mode filters), and card
+ * formulas that reference one through DOMO_BEAST_MODE, with the items that reference those. Returns [copy, removedCount].
+ */
 export function stripFormulaRefs(value, legacyIds) {
 	let removed = 0;
+	const formulas = new Set();
+	const findFormulas = (v) => {
+		if (Array.isArray(v)) v.forEach(findFormulas);
+		else if (v && typeof v === 'object' && !isRef(v)) {
+			if (typeof v.formula === 'string' && v.id && referencedBeastModes(v.formula).some((id) => legacyIds.has(id))) formulas.add(v.id);
+			Object.values(v).forEach(findFormulas);
+		}
+	};
+	findFormulas(value);
+	const gone = formulas.size ? new Set([...legacyIds, ...formulas]) : legacyIds;
 	const walk = (v) => {
 		if (Array.isArray(v)) {
 			const out = [];
 			for (const item of v) {
-				if (item && typeof item === 'object' && (legacyIds.has(item.formulaId) || legacyIds.has(item.column) || legacyIds.has(item.condition?.column))) {
+				if (item && typeof item === 'object' && ((typeof item.formula === 'string' && formulas.has(item.id)) || gone.has(item.formulaId) || gone.has(item.column) || gone.has(item.condition?.column))) {
 					removed++;
 					continue;
 				}
@@ -1288,6 +1304,22 @@ async function pushPlanUnlocked({
 		if (bound.text === text) return value;
 		return typeof value === 'string' ? bound.text : JSON.parse(bound.text);
 	};
+	const beastModeByLegacyId = new Map((plan.beastModes ?? []).filter((bm) => bm.legacyId).map((bm) => [bm.legacyId, bm]));
+	const withBeastModes = (value) => {
+		const text = JSON.stringify(value);
+		if (!referencedBeastModes(text).some((id) => beastModeByLegacyId.has(id))) return value;
+		const missing = new Set();
+		const bound = text.replace(BEAST_MODE_REFERENCE, (m, legacyId) => {
+			const bm = beastModeByLegacyId.get(legacyId);
+			if (!bm) return m;
+			const id = failed.has(`beastmode:${bm.key}`) ? undefined : lookup(`beastmode:${bm.key}`, 'id');
+			if (id === undefined) missing.add(`beastmode:${bm.key}`);
+			return `DOMO_BEAST_MODE(${id})`;
+		});
+		if (missing.size) throw new DependencyError(`Depends on ${[...missing].map((r) => `${r} (not pushed)`).join(', ')}`, [...missing]);
+		return JSON.parse(bound);
+	};
+	const bindReferences = (value, datasetKey) => withBeastModes(withVariables(value, datasetKey));
 
 	timer.phase('beastmodes', kinds.has('beastmodes'));
 	/* 4. Beast modes, validated in one batch per dataset. */
@@ -1785,11 +1817,11 @@ async function pushPlanUnlocked({
 						suggestion: 'Fix the beast mode, push again, and re-add the field to the card.'
 					});
 				}
-				const resolved = resolve(withVariables(withVariableControls(body, dropped), card.datasetKey));
+				const resolved = resolve(bindReferences(withVariableControls(body, dropped), card.datasetKey));
 				const pageKey = (card.pageKeys ?? []).find((k) => lookup(`page:${k}`, 'id') !== undefined);
 				const pageId = pageKey ? lookup(`page:${pageKey}`, 'id') : undefined;
 				if ((card.pageKeys ?? []).length > 1) notes.push(`also placed on ${card.pageKeys.length - 1} other page(s) through layouts`);
-				const bigNumber = card.bigNumber ? resolve(withVariables(dropped.size ? stripFormulaRefs(card.bigNumber, dropped)[0] : card.bigNumber, card.datasetKey)) : undefined;
+				const bigNumber = card.bigNumber ? resolve(bindReferences(dropped.size ? stripFormulaRefs(card.bigNumber, dropped)[0] : card.bigNumber, card.datasetKey)) : undefined;
 				const full = withBigNumber(resolved, bigNumber);
 				const hash = shortHash(full);
 				const isChanged = changed(entry, hash);
@@ -1804,21 +1836,23 @@ async function pushPlanUnlocked({
 				}
 				let id = entry?.id;
 				if (!entry) {
-					const created = await d.cards.createCard(c, resolved, pageId != null ? { pageId } : {});
+					const started = Date.now();
+					const created = await d.cards.createCard(c, resolved, pageId != null ? { pageId } : {}).catch((err) => adoptCreatedCard(err, { card, resolved, pageId, started, notes }));
 					id = idOf(created, 'id');
 					if (id == null) throw new Error('createCard returned no id');
 					setEntry(state, ref, { id, extra: { urn: created?.urn ?? String(id), pageId: pageId ?? null } });
 					await checkpoint();
 					const shown = d.cards.cardTitle?.(created?.response?.definition);
 					if (shown !== undefined && shown.replace(/\s+/g, '') !== card.title.replace(/\s+/g, '')) notes.push(`Domo shows the title "${shown}"`);
-					if (bigNumber) await applySummaryNumber(id, resolved, bigNumber);
+					if (created.recovered) await updateCardDroppingStale(id, bigNumber && d.cards.applyBigNumber ? resolved : full, notes);
+					if (bigNumber && (!created.recovered || d.cards.applyBigNumber)) await applySummaryNumber(id, resolved, bigNumber);
 				} else if (isChanged) {
 					await updateCardDroppingStale(id, bigNumber && d.cards.applyBigNumber ? resolved : full, notes);
 					if (bigNumber && d.cards.applyBigNumber) await applySummaryNumber(id, resolved, bigNumber);
 				}
 				setEntry(state, ref, { id, hash, ...(card.splitOf ? { extra: { splitOf: card.splitOf } } : {}) });
 				const drillChanged = await syncDrillViews(card, ref, id, drillViews, notes);
-				const text = JSON.stringify([full, ...drillViews.map((v) => v.body)]);
+				const text = JSON.stringify([full, body, ...drillViews.map((v) => v.body)]);
 				for (const f of plan.beastModes ?? []) if (f.legacyId && getEntry(state, `beastmode:${f.key}`) && text.includes(f.legacyId)) used.add(`beastmode:${f.key}`);
 				for (const v of variablePlans) if (getEntry(state, `variable:${v.key}`) && mentions(JSON.stringify(body), v, { columns: columnNames })) used.add(`variable:${v.key}`);
 				await record({ ...base, action: action === 'unchanged' && drillChanged ? 'update' : action, id, status: 'ok', notes });
@@ -1844,9 +1878,20 @@ async function pushPlanUnlocked({
 	function drillViewBodies(card, dropped, rootHash) {
 		return (card.drillPath ?? []).map((view) => {
 			const body = dropped.size ? stripFormulaRefs(view.body, dropped)[0] : view.body;
-			const resolved = resolve(withVariables(withVariableControls(body, dropped), card.datasetKey));
+			const resolved = resolve(bindReferences(withVariableControls(body, dropped), card.datasetKey));
 			return { field: view.grain ? `${view.field}:${view.grain}` : view.field, title: view.title, body: resolved, hash: shortHash([rootHash, resolved]) };
 		});
+	}
+
+	/** The drill view a create that failed saved anyway: the one on the card that is not in `seen` (ids it had before). */
+	async function adoptCreatedDrillView(err, rootId, body, seen, notes) {
+		if (!d.cards.mayHaveCreated?.(err)) throw err;
+		const extra = (await d.cards.listDrillViews(c, rootId)).filter((v) => !seen.has(String(v.id)));
+		if (!extra.length) throw err;
+		if (extra.length > 1) throw new Error(`${errorMessage(err)}; card ${rootId} got ${extra.length} new drill views (ids ${extra.map((v) => v.id).join(', ')}), so which one it created is unknown`, { cause: err });
+		await d.cards.updateDrillView(c, rootId, extra[0].id, body);
+		notes.push(`Domo answered "${errorMessage(err).slice(0, 200)}" but created drill view ${extra[0].id}; recovered it`);
+		return { id: extra[0].id };
 	}
 
 	function sameDrillLevels(known, views) {
@@ -1916,7 +1961,7 @@ async function pushPlanUnlocked({
 			if (known.length) await save(undefined);
 			const created = [];
 			for (const v of await withParentFormulas(card, rootId, views)) {
-				const view = await d.cards.createDrillView(c, rootId, v.body);
+				const view = await d.cards.createDrillView(c, rootId, v.body).catch((err) => adoptCreatedDrillView(err, rootId, v.body, new Set([...live, ...created.map((x) => String(x.id))]), notes));
 				created.push({ id: view.id, field: v.field, hash: v.hash });
 				await save(created);
 			}
@@ -1950,7 +1995,7 @@ async function pushPlanUnlocked({
 		let members;
 		try {
 			const body = dropped.size ? stripFormulaRefs(card.body, dropped)[0] : card.body;
-			members = await d.cards.previewMembers(c, resolve(withVariables(withVariableControls(body, dropped), card.datasetKey)), card.split.ref);
+			members = await d.cards.previewMembers(c, resolve(bindReferences(withVariableControls(body, dropped), card.datasetKey)), card.split.ref);
 		} catch (err) {
 			keep(`its ${card.split.name} members could not be read: ${errorMessage(err)}`);
 			return;
@@ -2377,6 +2422,31 @@ async function pushPlanUnlocked({
 		} catch (err) {
 			await record({ ...base, action: entry ? 'update' : 'create', id: entry?.id ?? null, status: err instanceof DependencyError ? 'skipped' : 'failed', error: errorMessage(err), notes });
 		}
+	}
+
+	/** Ids of every object and drill view in state, so a recovered create never takes one of them. */
+	function knownIds() {
+		const ids = new Set();
+		for (const entry of Object.values(state.objects ?? {})) {
+			if (entry?.id != null) ids.add(String(entry.id));
+			for (const v of entry?.extra?.drillViews ?? []) if (v?.id != null) ids.add(String(v.id));
+		}
+		return ids;
+	}
+
+	/** The card a create that failed anyway saved on its page, or the create's error. */
+	async function adoptCreatedCard(err, { card, resolved, pageId, started, notes }) {
+		if (pageId == null || !d.cards.findCreatedCard || !d.cards.mayHaveCreated?.(err)) throw err;
+		const titles = [card.title, d.cards.cardTitle?.(resolved.definition)];
+		let found;
+		try {
+			found = await d.cards.findCreatedCard(c, { pageId, titles, since: started, known: knownIds() });
+		} catch (lookupErr) {
+			throw new Error(`${errorMessage(err)}; checking page ${pageId} for a card Domo created anyway failed: ${errorMessage(lookupErr)}`, { cause: lookupErr });
+		}
+		if (!found) throw err;
+		notes.push(`Domo answered "${errorMessage(err).slice(0, 200)}" but created the card; recovered card ${found.id} from page ${pageId}`);
+		return { id: found.id, urn: String(found.id), recovered: true };
 	}
 
 	async function applySummaryNumber(cardId, body, bigNumber) {
