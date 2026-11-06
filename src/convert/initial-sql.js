@@ -735,9 +735,11 @@ function classify(st, sql) {
 			}
 			return blocked(st, 'alters a database object (ALTER)');
 		case 'USE': {
-			const kindWord = ['DATABASE', 'SCHEMA', 'WAREHOUSE', 'ROLE', 'SECONDARY'].includes(word(1)) ? word(1) : 'DATABASE';
-			const name = readName(tk, kindWord === 'DATABASE' && word(1) !== 'DATABASE' ? 1 : 2);
+			const explicit = ['DATABASE', 'SCHEMA', 'WAREHOUSE', 'ROLE', 'SECONDARY'].includes(word(1));
+			const name = readName(tk, explicit ? 2 : 1);
 			if (!name) return blocked(st, 'has a USE statement t2d cannot read');
+			// Snowflake reads a bare `USE db.schema` as USE SCHEMA and a bare `USE db` as USE DATABASE.
+			const kindWord = explicit ? word(1) : name.parts.length > 1 ? 'SCHEMA' : 'DATABASE';
 			return { ...base, kind: 'use', target: kindWord, parts: name.parts.map((p) => p.name) };
 		}
 		case 'DECLARE': {

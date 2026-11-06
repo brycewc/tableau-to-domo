@@ -175,3 +175,10 @@ test('canonical folds unquoted names to upper case', () => {
 	assert.equal(canonical({ name: 'abc', quoted: false }), 'ABC');
 	assert.equal(canonical({ name: 'abc', quoted: true }), 'abc');
 });
+
+test('a bare USE reads two parts as a schema and one part as a database', () => {
+	const [schema, database] = parseScript('use SF_EDH.EDH_ODS_READ; use CSG_DB;');
+	assert.equal(schema.target, 'SCHEMA');
+	assert.deepEqual(schema.parts.map((p) => p.name ?? p), ['SF_EDH', 'EDH_ODS_READ']);
+	assert.equal(database.target, 'DATABASE');
+});

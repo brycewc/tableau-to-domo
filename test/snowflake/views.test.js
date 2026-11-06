@@ -54,3 +54,18 @@ select 1;`;
 	assert.ok(views[1].sql.includes(`select domain from ${views[0].fqName}`));
 	assert.match(planSnowflakeViews({ initialSql: `${initialSql} update leads set x = 1;`, target }).unsupported, /UPDATE on leads/);
 });
+
+test('a bare USE db.schema sets the schema and its database; a bare USE db sets the database', () => {
+	const plan = planSnowflakeViews({
+		initialSql: 'use SF_EDH.EDH_ODS_READ;\ncreate temp table a as select s.id from EDH_ODS_SALESFORCE.SBQQ__SUBSCRIPTION__C s join FREE_EMAILS f on f.id = s.id;',
+		customSql: [{ id: 'c', name: 'Custom SQL Query', sql: 'select * from a' }],
+		database: 'OTHER',
+		schema: 'PUBLIC',
+		target
+	});
+	const temp = plan.views.find((v) => v.kind === 'temp');
+	assert.match(temp.sql, /SF_EDH\.EDH_ODS_SALESFORCE\.SBQQ__SUBSCRIPTION__C/);
+	assert.match(temp.sql, /SF_EDH\.EDH_ODS_READ\.FREE_EMAILS/);
+	const one = planSnowflakeViews({ initialSql: 'use CSG_DB;\ncreate temp table b as select 1 as x from S.T;', customSql: [], database: 'OTHER', schema: 'PUBLIC', target });
+	assert.match(one.views[0].sql, /CSG_DB\.S\.T/);
+});

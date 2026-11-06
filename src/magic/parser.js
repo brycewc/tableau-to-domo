@@ -736,10 +736,10 @@ function parser(tokens, source, { formula = false } = {}) {
 		if (u === 'SELECT' || u === 'WITH' || (head.v === '(' && startsQueryAt(0))) return { kind: 'query', query: parseQuery() };
 		if (u === 'USE') {
 			i++;
-			const target = ['DATABASE', 'SCHEMA', 'WAREHOUSE', 'ROLE', 'SECONDARY'].includes(peek()?.u) ? take().u : 'SCHEMA';
-			if (target === 'SECONDARY') return (i = tokens.length), { kind: 'use', target: 'SECONDARY ROLES' };
+			const explicit = ['DATABASE', 'SCHEMA', 'WAREHOUSE', 'ROLE', 'SECONDARY'].includes(peek()?.u) ? take().u : undefined;
+			if (explicit === 'SECONDARY') return (i = tokens.length), { kind: 'use', target: 'SECONDARY ROLES' };
 			const parts = qualifiedName();
-			return { kind: 'use', target, parts };
+			return { kind: 'use', target: explicit ?? (parts.length > 1 ? 'SCHEMA' : 'DATABASE'), parts };
 		}
 		if (u === 'ALTER') {
 			i++;
