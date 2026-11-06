@@ -180,6 +180,17 @@ test('buildSqlView aliases only the referenced tables', () => {
 	assert.deepEqual(view.trigger, { dataSource: { $ref: 'dataset:y' } });
 });
 
+test('buildSqlView applies the view rules in order and reports what it could not rewrite', () => {
+	const sql = "select s.account_id, iff(s.n > 0, 'p', 'n') as sign, regexp_substr(s.name, 'x') as r, cast(s.d as timestamp_ltz) as d from (select account_id, o.n, o.name, o.d::timestamp_ntz as d from s.orders o) s";
+	const issues = [];
+	const view = buildSqlView({ name: 'V', description: '', sql, refs: [{ start: sql.indexOf('s.orders'), end: sql.indexOf('s.orders') + 8, table: 0 }], aliasKeys: ['orders'], columns: [{ name: 'ACCOUNT_ID', type: 'STRING' }, { name: 'SIGN', type: 'STRING' }, { name: 'R', type: 'STRING' }, { name: 'D', type: 'DATETIME' }], issues });
+	assert.equal(view.schema.viewTemplate.selectString, "select s.account_id, CASE WHEN (s.n > 0) THEN 'p' ELSE 'n' END as sign, regexp_substr(s.name, 'x') as r, cast(s.d as timestamp_ltz) as d from (select account_id AS account_id, o.n AS n, o.name AS name, o.d::TIMESTAMP as d from `t1` o) s");
+	assert.deepEqual(view.schema.tables[0].columns.map((c) => c.name), ['account_id', 'sign', 'r', 'd']);
+	assert.ok(issues.some((i) => i.code === 'data.view-sql-unsupported-function' && /REGEXP_SUBSTR/.test(i.message)));
+	assert.ok(issues.some((i) => /TIMESTAMP_LTZ/.test(i.message) && i.severity === 'warning'));
+	assert.ok(issues.some((i) => /IFF rewritten/.test(i.message)));
+});
+
 test('an Initial SQL dataflow reads its registered tables and its output is the card target', () => {
 	const ds = {
 		id: 'federated.9',

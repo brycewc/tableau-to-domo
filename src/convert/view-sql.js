@@ -1,6 +1,6 @@
 /**
- * Rewrites for warehouse SQL that the SQL DataSet View parser rejects before the query reaches the
- * warehouse. Pure, no I/O.
+ * Rewrites for warehouse SQL that the SQL DataSet View validator rejects or the Snowflake deparser breaks. Each export
+ * cites the rule it answers in docs/VIEW-SQL-RULES.md. Pure, no I/O.
  */
 
 const COMPARISON = /^(?:=|<>|!=|<=|>=|<|>|NOT\s+I?LIKE\b|I?LIKE\b|NOT\s+IN\b|IN\b)/i;
@@ -70,7 +70,7 @@ const lowerOperand = (text) => {
 };
 
 /**
- * Snowflake `COLLATE(<expr>, '<spec>')`, which the view parser rejects in either syntax. A case-sensitive spec is just
+ * Rule P1. Snowflake `COLLATE(<expr>, '<spec>')`. A case-sensitive spec is just
  * `<expr>`. A case-insensitive one ('en-ci') compared with an operand becomes `LOWER(<expr>) <op> LOWER(<operand>)`, the
  * same rows; anywhere else (a projected column) it becomes `<expr>`, and later comparisons on it are case-sensitive.
  * @param {string} sql
@@ -147,7 +147,7 @@ const DATE_PARTS = new Map(
 	}).flatMap(([unit, names]) => names.split(' ').map((n) => [n, unit]))
 );
 
-/** The SQL DataSet View parser rejects DATEADD (and TIMEADD, TIMESTAMPADD) but accepts DATE_ADD(expr, INTERVAL n PART).
+/** Rules F1 and F3: DATEADD, TIMEADD and TIMESTAMPADD as DATE_ADD(expr, INTERVAL n PART).
  * @returns {{ sql: string, rewrites: number, skipped: string[] }} `skipped`: calls whose part has no interval unit */
 export function rewriteDateAdd(sql) {
 	let out = String(sql ?? '');
@@ -190,8 +190,8 @@ const DATE_DIFFS = {
 	YEAR: (a, b) => `(YEAR(${b}) - YEAR(${a}))`
 };
 
-/** The view parser reads the part of DATEDIFF(<part>, a, b) as a column and rejects TIMESTAMPDIFF, but accepts
- * DATEDIFF(b, a) in days and YEAR/QUARTER/MONTH arithmetic, which count the same boundaries Snowflake does.
+/** Rules Q1 and F4: DATEDIFF(<part>, a, b) as DATEDIFF(b, a) in days, or YEAR/QUARTER/MONTH arithmetic, which count the
+ * same boundaries Snowflake does.
  * @returns {{ sql: string, rewrites: number, skipped: string[] }} `skipped`: calls in a part with no rewrite */
 export function rewriteDateDiff(sql) {
 	let out = String(sql ?? '');
@@ -276,8 +276,7 @@ function applyEdits(s, edits) {
 	return out;
 }
 
-/** Each later branch of a UNION/INTERSECT/EXCEPT aliased to the first branch's column names: the view parser requires
- * every branch to name its columns the same, as written ("column names do not match").
+/** Rules U1 and S1: each later set-operation branch aliased to the first branch's column names, as written.
  * @returns {{ sql: string, aliased: number }} */
 export function aliasUnionBranches(sql) {
 	const s = String(sql ?? '');
@@ -296,7 +295,7 @@ export function aliasUnionBranches(sql) {
 	return { sql: applyEdits(s, edits), aliased: edits.length };
 }
 
-/** Domo types a bare NULL as STRING, so a NULL branch item of a date or number column fails "column types do not match".
+/** Rules T1 and U2: a bare NULL branch item cast to its column's type.
  * @param {Map<string, string>} sqlTypes  lower-cased column name -> SQL type
  * @returns {{ sql: string, cast: number }} */
 export function castUnionNulls(sql, sqlTypes) {
@@ -318,8 +317,7 @@ export function castUnionNulls(sql, sqlTypes) {
 
 const CONSTANT = /^(?:NULL|TRUE|FALSE|[+-]?\d+(?:\.\d+)?|'(?:[^']|'')*'|CAST\(\s*(?:NULL|[+-]?\d+(?:\.\d+)?|'(?:[^']|'')*')\s+AS\s+[\w ()]+\))$/i;
 
-/** The view index job fails ("TableReference is null") on a UNION column that is a constant in every branch, so the
- * first branch's constant is tied to one of its columns without changing its value.
+/** Rule X1: a UNION column constant in every branch has the first branch's constant tied to one of its columns.
  * @returns {{ sql: string, anchored: number }} */
 export function anchorConstantUnionColumns(sql) {
 	const s = String(sql ?? '');
@@ -342,7 +340,7 @@ export function anchorConstantUnionColumns(sql) {
 const unionCast = (expr, sqlType) =>
 	/^NULL$/i.test(expr.trim()) || sqlType === 'VARCHAR' ? `CAST(${expr} AS ${sqlType})` : `TRY_CAST(CAST(${expr} AS VARCHAR) AS ${sqlType})`;
 
-/** The view parser rejects branches whose types differ ("column types do not match").
+/** Rule U2.
  * @returns {{ sql: string, cast: number }} */
 export function castUnionColumn(sql, column, sqlType) {
 	const s = String(sql ?? '');
@@ -444,7 +442,7 @@ const IDENT = String.raw`(?:"(?:[^"]|"")+"|\`[^\`]+\`|[A-Za-z_][\w$]*)`;
 const NOT_CLAUSE = String.raw`(?!(?:SELECT|FROM|ON|USING|WHERE|GROUP|ORDER|HAVING|LIMIT|UNION|INNER|LEFT|RIGHT|FULL|OUTER|CROSS|JOIN|NATURAL|LATERAL|UNPIVOT|PIVOT|QUALIFY|WINDOW|EXCEPT|INTERSECT|MINUS|AND|OR)\b)`;
 const unquote = (id) => (/^["`]/.test(id) ? id.slice(1, -1).replace(/""/g, '"') : id);
 
-/** CTEs as derived tables: the view parser takes a CTE name for a table to rename (JsqlTableRenameException). */
+/** Rule R1: CTEs as derived tables. */
 export function inlineCtes(sql) {
 	const s = String(sql ?? '').trim();
 	const head = s.match(/^WITH\s+/i);
@@ -478,8 +476,8 @@ export function inlineCtes(sql) {
 	return { sql: main, inlined: ctes.map((c) => c.name) };
 }
 
-/** UNPIVOT, which the view parser cannot read, as a CROSS JOIN with the column names and a CASE; NULL values are
- * dropped as UNPIVOT does, but the unpivoted columns stay in a `SELECT *` over the result. */
+/** Rule P2: UNPIVOT as a CROSS JOIN with the column names and a CASE; NULL values are dropped as UNPIVOT does, but the
+ * unpivoted columns stay in a `SELECT *` over the result. */
 export function rewriteUnpivot(sql) {
 	let out = String(sql ?? '');
 	let rewrites = 0;
@@ -511,14 +509,13 @@ export function rewriteUnpivot(sql) {
 	return { sql: out, rewrites };
 }
 
-/** Output column names as written: the view parser matches the schema to them case-sensitively.
+/** Rule N1: output column names as written.
  * @returns {(string|undefined)[]|undefined} */
 export function projectionNames(sql) {
 	return projectionItems(sql)?.map((item) => item?.name);
 }
 
-/** Domo's star expansion (dataShared AllColumnsReplacementVisitor) shares one column accumulator across the branches of a
- * UNION under `*`, leaking earlier branches' names into later derived tables, so a star over a UNION is written out.
+/** Rule S1: a star over a UNION derived table written out as its column list.
  * @returns {{ sql: string, expanded: number }} */
 export function expandStarsOverUnions(sql) {
 	const s = String(sql ?? '');
@@ -558,8 +555,7 @@ export function matchColumnCaseFully(sql) {
 	return { sql: out, fixed: [...fixed] };
 }
 
-/** References to a derived table's columns in that column's case: Snowflake folds unquoted names, but the view
- * index job resolves them as written and fails silently on `s.name` for a column defined `Name`.
+/** Rule D1: references to a derived table's columns written in that column's case.
  * @returns {{ sql: string, fixed: string[] }} */
 export function matchColumnCase(sql) {
 	const s = String(sql ?? '');
@@ -820,7 +816,7 @@ function insideQuotes(sql, index) {
 	return false;
 }
 
-/** `FROM (subquery)` with no alias, which Snowflake accepts and the view parser rejects ("table name can't be null"). */
+/** Rule P3: `FROM (subquery)` with no alias. */
 export function aliasDerivedTables(sql) {
 	let out = String(sql ?? '');
 	let added = 0;
@@ -837,22 +833,269 @@ export function aliasDerivedTables(sql) {
 	return { sql: out, added };
 }
 
-/** One-argument TO_VARCHAR/TO_CHAR, which the view parser does not know, as CAST(... AS VARCHAR). */
-export function rewriteToVarchar(sql) {
+/** Rule F1 (docs/VIEW-SQL-RULES.md), Databricks-only entries left out. */
+export const SUPPORTED_FUNCTIONS = new Set(
+	`__DOMO_REQUIRED_FILTER ABS ADDDATE ADDTIME ANY_VALUE APPROXIMATE_COUNT_DISTINCT APPROXIMATE_COUNT_DISTINCT_SYNOPSIS
+	APPROXIMATE_COUNT_DISTINCT_OF_SYNOPSIS APPROXIMATE_MEDIAN APPROXIMATE_PERCENTILE AVG CALENDAR CALENDAR_PERIOD
+	CALENDAR_PERIOD_ROLLING CALENDAR_PERIOD_TO_DATE CASE CAST CEILING COALESCE CONCAT CONVERT_TZ CORR COUNT CURDATE CURRENT_DATE
+	CURRENT_TIME CURRENT_TIMESTAMP CURTIME DATE DATE_ADD DATE_FORMAT DATE_RANGE DATE_SUB DATE_TRUNC DATEDIFF DAY DAYNAME DAYOFMONTH
+	DAYOFWEEK DAYOFYEAR DIV DOMO_BEAST_MODE DYNACAST FIRST_VALUE FIXED FLOOR FROM_DAYS FROM_UNIXTIME GRAIN_HOUR GRAIN_MINUTE
+	GRAIN_SECOND HOUR IFNULL INITCAP INSERT INSTR LAG LAST_DAY LAST_VALUE LCASE LEAD LEFT LENGTH LISTAGG LN LOG LOWER LPAD MAX MD5
+	MEDIAN MIN MINUTE MOD MONTH MONTHNAME NOW NTILE NULLIF NVL OCTET_LENGTH ONLY_AGG PERCENTILE PERCENTILE25 PERCENTILE75
+	PERCENTILE99 PERCENTILE_CONT PERIOD_ADD PERIOD_DIFF POWER POW QUARTER RAND RANDOM RANK DENSE_RANK REGEXP_REPLACE REPLACE RIGHT
+	ROUND RPAD SAFE_DIVIDE SEC_TO_TIME SECOND SHA1 SHA224 SHA256 SHA384 SHA512 SQRT SPLIT_PART STDDEV STDDEV_POP STRPOS STR_CONTAINS
+	STR_DIGITS STR_ENDS_WITH STR_REMOVE_DIGITS STR_STARTS_WITH STR_TO_DATE SUBDATE SUBSTR SUBSTRING SUBSTRING_INDEX SUBTIME SUM
+	SYSDATE TIME TIME_FORMAT TIME_TO_SEC TIMEDIFF TIMESTAMP TO_CHAR TO_DATE TO_DAYS TO_NUMBER TRIM TRUNC TRY_CAST UNIX_TIMESTAMP
+	UPPER VAR VAR_POP WEEK WEEKDAY WEEKOFYEAR WIDTH_BUCKET YEAR YEARWEEK HLL_SKETCH_INIT HLL_SKETCH_MERGE HLL_SKETCH_MERGE_PARTIAL
+	HLL_SKETCH_ESTIMATE`.split(/\s+/)
+);
+
+const GRAMMAR_FORMS = new Set(
+	`AND ALL ANY AS BETWEEN BY CASE CAST CURRENT DISTINCT ELSE END ESCAPE EXCEPT EXISTS EXTRACT FILTER FROM GROUP GROUP_CONCAT
+	HAVING ILIKE IN INTERSECT INTERVAL IS JOIN KEEP LATERAL LIKE LIMIT MINUS NOT NULLS ON OR ORDER OVER PARTITION PIVOT QUALIFY
+	RANGE RECURSIVE RLIKE REGEXP ROWS SELECT SOME THEN TOP TRY_CAST UNION USING VALUES WHEN WHERE WITH WITHIN`.split(/\s+/)
+);
+
+function splitArgs(sql, argsStart, close) {
+	const starts = [argsStart, ...close.commas.map((c) => c + 1)];
+	const ends = [...close.commas, close.end];
+	const args = starts.map((s, k) => sql.slice(s, ends[k]).trim());
+	return args.length === 1 && !args[0] ? [] : args;
+}
+
+function rewriteCalls(sql, names, rewrite) {
 	let out = String(sql ?? '');
-	let rewrites = 0;
+	const pattern = new RegExp(String.raw`(?<![\w$."\`])(${names.join('|')})\s*\(`, 'gi');
 	for (let searchFrom = 0; ; ) {
-		const m = [...out.slice(searchFrom).matchAll(/\bTO_(?:VARCHAR|CHAR)\s*\(/gi)].map((x) => ({ index: x.index + searchFrom, text: x[0] })).find((x) => !insideQuotes(out, x.index));
-		if (!m) break;
-		const argsStart = m.index + m.text.length;
+		pattern.lastIndex = searchFrom;
+		let found;
+		for (let m; (m = pattern.exec(out)); ) {
+			if (!insideQuotes(out, m.index)) {
+				found = m;
+				break;
+			}
+		}
+		if (!found) break;
+		const argsStart = found.index + found[0].length;
 		const close = closeParen(out, argsStart);
-		if (!close || close.commas.length) {
+		const replacement = close ? rewrite(found[1].toUpperCase(), splitArgs(out, argsStart, close), out.slice(found.index, close.end + 1)) : undefined;
+		if (replacement === undefined) {
 			searchFrom = argsStart;
 			continue;
 		}
-		out = `${out.slice(0, m.index)}CAST(${out.slice(argsStart, close.end).trim()} AS VARCHAR)${out.slice(close.end + 1)}`;
-		rewrites++;
-		searchFrom = m.index;
+		out = `${out.slice(0, found.index)}${replacement}${out.slice(close.end + 1)}`;
+		searchFrom = found.index;
 	}
-	return { sql: out, rewrites };
+	return out;
+}
+
+const SIMPLE_OPERAND = new RegExp(`^(?:(?:${IDENT}\\.)*${IDENT}|'(?:[^']|'')*'|[+-]?\\d+(?:\\.\\d+)?)$`, 'i');
+const wrap = (expr) => (SIMPLE_OPERAND.test(expr) ? expr : `(${expr})`);
+const INTEGER = /^\d+$/;
+const NUMBER_LITERAL = /^[+-]?\d+(?:\.\d+)?$/;
+const LITERAL_STRING = /^'(?:[^']|'')*'$/;
+const isNullLiteral = (expr) => /^NULL$/i.test(expr);
+const datePart = (arg) => DATE_PARTS.get(String(arg).replace(/^'|'$/g, '').toLowerCase());
+const numberType = (args) => (args.length === 1 ? 'NUMBER' : args.slice(1).every((a) => INTEGER.test(a)) ? `NUMBER(${args.slice(1).join(', ')})` : undefined);
+
+function greatest(args, op) {
+	return args.reduce((x, y) => {
+		const a = wrap(x);
+		const b = wrap(y);
+		return `CASE WHEN ${a} IS NULL OR ${b} IS NULL THEN NULL WHEN ${a} ${op} ${b} THEN ${a} ELSE ${b} END`;
+	});
+}
+
+function trimClass(chars) {
+	if (chars === undefined) return ' ';
+	const inner = LITERAL_STRING.test(chars) ? chars.slice(1, -1) : undefined;
+	if (!inner || /[\\'\]^[]/.test(inner)) return undefined;
+	return `[${inner.replace(/-/g, '')}${inner.includes('-') ? '-' : ''}]`;
+}
+
+const FUNCTION_REWRITES = {
+	TO_VARCHAR: (args) => `TO_CHAR(${args.join(', ')})`,
+	IFF: (args) => (args.length === 3 ? `CASE WHEN ${wrap(args[0])} THEN ${args[1]} ELSE ${args[2]} END` : undefined),
+	NVL2: (args) => (args.length === 3 ? `CASE WHEN ${wrap(args[0])} IS NOT NULL THEN ${args[1]} ELSE ${args[2]} END` : undefined),
+	ZEROIFNULL: (args) => (args.length === 1 ? `COALESCE(${args[0]}, 0)` : undefined),
+	NULLIFZERO: (args) => (args.length === 1 ? `NULLIF(${args[0]}, 0)` : undefined),
+	DIV0: (args) => (args.length === 2 ? `CASE WHEN ${wrap(args[1])} = 0 THEN 0 ELSE ${wrap(args[0])} / ${wrap(args[1])} END` : undefined),
+	DIV0NULL: (args) => (args.length === 2 ? `CASE WHEN ${wrap(args[1])} = 0 OR ${wrap(args[1])} IS NULL THEN 0 ELSE ${wrap(args[0])} / ${wrap(args[1])} END` : undefined),
+	DECODE: (args) => {
+		if (args.length < 3) return undefined;
+		const subject = wrap(args[0]);
+		const pairs = [];
+		for (let k = 1; k + 1 < args.length; k += 2) {
+			const search = args[k];
+			let test = `(${subject} = ${wrap(search)} OR (${subject} IS NULL AND ${wrap(search)} IS NULL))`;
+			if (isNullLiteral(search)) test = `${subject} IS NULL`;
+			else if (LITERAL_STRING.test(search) || NUMBER_LITERAL.test(search)) test = `${subject} = ${search}`;
+			pairs.push(`WHEN ${test} THEN ${args[k + 1]}`);
+		}
+		return `CASE ${pairs.join(' ')}${args.length % 2 === 0 ? ` ELSE ${args.at(-1)}` : ''} END`;
+	},
+	CONTAINS: (args) => (args.length === 2 ? `STR_CONTAINS(${args.join(', ')})` : undefined),
+	STARTSWITH: (args) => (args.length === 2 ? `STR_STARTS_WITH(${args.join(', ')})` : undefined),
+	ENDSWITH: (args) => (args.length === 2 ? `STR_ENDS_WITH(${args.join(', ')})` : undefined),
+	LEN: (args) => (args.length === 1 ? `LENGTH(${args[0]})` : undefined),
+	CHAR_LENGTH: (args) => (args.length === 1 ? `LENGTH(${args[0]})` : undefined),
+	CHARACTER_LENGTH: (args) => (args.length === 1 ? `LENGTH(${args[0]})` : undefined),
+	CEIL: (args) => (args.length === 1 ? `CEILING(${args[0]})` : undefined),
+	LTRIM: (args) => {
+		const cls = args.length <= 2 && args.length ? trimClass(args[1]) : undefined;
+		return cls ? `REGEXP_REPLACE(${args[0]}, '^${cls}+', '')` : undefined;
+	},
+	RTRIM: (args) => {
+		const cls = args.length <= 2 && args.length ? trimClass(args[1]) : undefined;
+		return cls ? `REGEXP_REPLACE(${args[0]}, '${cls}+$', '')` : undefined;
+	},
+	LPAD: (args) => (args.length === 2 ? `LPAD(${args[0]}, ${args[1]}, ' ')` : undefined),
+	RPAD: (args) => (args.length === 2 ? `RPAD(${args[0]}, ${args[1]}, ' ')` : undefined),
+	CONCAT_WS: (args) => (args.length >= 2 ? `CONCAT(${args.slice(1).flatMap((a, k) => (k ? [args[0], a] : [a])).join(', ')})` : undefined),
+	CHARINDEX: (args) => (args.length === 2 ? `INSTR(${args[1]}, ${args[0]})` : undefined),
+	POSITION: (args) => {
+		const parts = args.length === 1 ? splitTopLevelIn(args[0]) : args;
+		return parts?.length === 2 ? `INSTR(${parts[1]}, ${parts[0]})` : undefined;
+	},
+	SQUARE: (args) => (args.length === 1 ? `POWER(${args[0]}, 2)` : undefined),
+	SHA2: (args) => {
+		const bits = args[1] ?? '256';
+		return args.length <= 2 && ['224', '256', '384', '512'].includes(bits) ? `SHA${bits}(${args[0]})` : undefined;
+	},
+	SHA2_HEX: (args) => FUNCTION_REWRITES.SHA2(args),
+	GREATEST: (args) => (args.length >= 2 && args.length <= 3 ? greatest(args, '>=') : undefined),
+	LEAST: (args) => (args.length >= 2 && args.length <= 3 ? greatest(args, '<=') : undefined),
+	GETDATE: (args) => (args.length ? undefined : 'CURRENT_TIMESTAMP'),
+	SYSTIMESTAMP: (args) => (args.length ? undefined : 'CURRENT_TIMESTAMP'),
+	LOCALTIMESTAMP: (args) => (args.length ? undefined : 'CURRENT_TIMESTAMP'),
+	TO_TIMESTAMP: (args) => (args.length === 1 ? `CAST(${args[0]} AS TIMESTAMP)` : undefined),
+	TO_TIMESTAMP_NTZ: (args) => (args.length === 1 ? `CAST(${args[0]} AS TIMESTAMP)` : undefined),
+	TRY_TO_TIMESTAMP: (args) => (args.length === 1 ? `TRY_CAST(${args[0]} AS TIMESTAMP)` : undefined),
+	TRY_TO_TIMESTAMP_NTZ: (args) => (args.length === 1 ? `TRY_CAST(${args[0]} AS TIMESTAMP)` : undefined),
+	TRY_TO_DATE: (args) => (args.length === 1 ? `TRY_CAST(${args[0]} AS DATE)` : undefined),
+	TO_DOUBLE: (args) => (args.length === 1 ? `CAST(${args[0]} AS DOUBLE)` : undefined),
+	TRY_TO_DOUBLE: (args) => (args.length === 1 ? `TRY_CAST(${args[0]} AS DOUBLE)` : undefined),
+	TO_BOOLEAN: (args) => (args.length === 1 ? `CAST(${args[0]} AS BOOLEAN)` : undefined),
+	TRY_TO_BOOLEAN: (args) => (args.length === 1 ? `TRY_CAST(${args[0]} AS BOOLEAN)` : undefined),
+	TO_NUMBER: (args) => (args.length > 1 && args.length <= 3 && numberType(args) ? `CAST(${args[0]} AS ${numberType(args)})` : undefined),
+	TO_DECIMAL: (args) => (args.length <= 3 && numberType(args) ? `CAST(${args[0]} AS ${numberType(args)})` : undefined),
+	TO_NUMERIC: (args) => FUNCTION_REWRITES.TO_DECIMAL(args),
+	TRY_TO_NUMBER: (args) => (args.length <= 3 && numberType(args) ? `TRY_CAST(${args[0]} AS ${numberType(args)})` : undefined),
+	TRY_TO_DECIMAL: (args) => FUNCTION_REWRITES.TRY_TO_NUMBER(args),
+	TRY_TO_NUMERIC: (args) => FUNCTION_REWRITES.TRY_TO_NUMBER(args),
+	DATE_PART: (args) => (args.length === 2 && /^'?[A-Za-z_]+'?$/.test(args[0]) ? `EXTRACT(${args[0].replace(/'/g, '').toUpperCase()} FROM ${args[1]})` : undefined),
+	DATE_TRUNC: (args) => (args.length === 2 && datePart(args[0]) && !LITERAL_STRING.test(args[0]) ? `DATE_TRUNC('${args[0].toLowerCase()}', ${args[1]})` : undefined),
+	TRUNC: (args) => (args.length === 2 && datePart(args[1]) && !LITERAL_STRING.test(args[1]) ? `TRUNC(${args[0]}, '${args[1].toLowerCase()}')` : undefined),
+	LAST_DAY: (args) => (args.length === 2 && datePart(args[1]) === 'MONTH' ? `LAST_DAY(${args[0]})` : undefined),
+	ADD_MONTHS: (args) => (args.length === 2 ? `DATE_ADD(${args[0]}, INTERVAL ${/^[+-]?\d+$/.test(args[1]) ? args[1] : `(${args[1]})`} MONTH)` : undefined),
+	COUNT_IF: (args) => (args.length === 1 ? `COUNT(CASE WHEN ${args[0]} THEN 1 END)` : undefined)
+};
+
+const APPROXIMATE_REWRITES = new Set(['ADD_MONTHS']);
+
+function splitTopLevelIn(text) {
+	const at = topLevelKeyword(text, 'IN')[0];
+	return at === undefined ? undefined : [text.slice(0, at).trim(), text.slice(at + 2).trim()];
+}
+
+/** Rejected Snowflake functions as supported ones with the same result (rule F2), and bare date parts quoted (rule Q1).
+ * @returns {{ sql: string, rewritten: string[], approximate: string[] }} */
+export function rewriteFunctions(sql) {
+	const rewritten = [];
+	const out = rewriteCalls(sql, Object.keys(FUNCTION_REWRITES), (name, args, text) => {
+		const replacement = FUNCTION_REWRITES[name](args, text);
+		if (replacement !== undefined) rewritten.push(name);
+		return replacement;
+	});
+	const names = [...new Set(rewritten)];
+	return { sql: out, rewritten: names, approximate: names.filter((n) => APPROXIMATE_REWRITES.has(n)) };
+}
+
+/** Rule F1; window calls (`OVER`, `WITHIN GROUP`) are analytic expressions, which the validator does not check by name.
+ * @returns {string[]} distinct upper-cased names */
+export function unsupportedFunctions(sql) {
+	const s = String(sql ?? '');
+	const found = new Set();
+	for (const m of s.matchAll(/(?<![\w$."`])([A-Za-z_][\w$]*)\s*\(/g)) {
+		const name = m[1].toUpperCase();
+		if (SUPPORTED_FUNCTIONS.has(name) || GRAMMAR_FORMS.has(name) || insideQuotes(s, m.index)) continue;
+		if (/(?:\bAS|::)\s*$/i.test(s.slice(0, m.index))) continue;
+		const close = closeParen(s, m.index + m[0].length);
+		if (close && /^\s*(?:OVER|WITHIN\s+GROUP)\b/i.test(s.slice(close.end + 1))) continue;
+		found.add(name);
+	}
+	return [...found];
+}
+
+const CAST_TYPES = new Map([
+	['TIMESTAMP_NTZ', 'TIMESTAMP'],
+	['TEXT', 'VARCHAR'],
+	['DOUBLE PRECISION', 'DOUBLE'],
+	['FLOAT4', 'FLOAT'],
+	['BYTEINT', 'INTEGER']
+]);
+const UNTYPED_CASTS = /^(?:TIMESTAMP_LTZ|TIMESTAMP_TZ)$/i;
+const CAST_TYPE_NAME = /^(DOUBLE\s+PRECISION|[A-Za-z_][\w]*)/i;
+
+/** Rule T2.
+ * @returns {{ sql: string, rewrites: number, untyped: string[] }} `untyped`: casts with no such name (TIMESTAMP_LTZ, TIMESTAMP_TZ) */
+export function rewriteCastTypes(sql) {
+	let rewrites = 0;
+	const untyped = new Set();
+	const mapType = (type) => {
+		const m = type.match(CAST_TYPE_NAME);
+		if (!m) return undefined;
+		if (UNTYPED_CASTS.test(m[1])) untyped.add(m[1].toUpperCase());
+		const to = CAST_TYPES.get(m[1].toUpperCase().replace(/\s+/g, ' '));
+		if (!to) return undefined;
+		rewrites++;
+		return `${to}${type.slice(m[0].length)}`;
+	};
+	let out = rewriteCalls(sql, ['CAST', 'TRY_CAST'], (name, args) => {
+		if (args.length !== 1) return undefined;
+		const at = topLevelKeyword(args[0], 'AS').at(-1);
+		if (at === undefined) return undefined;
+		const type = mapType(args[0].slice(at + 2).trim());
+		return type === undefined ? undefined : `${name}(${args[0].slice(0, at).trim()} AS ${type})`;
+	});
+	out = out.replace(/::\s*(DOUBLE\s+PRECISION|[A-Za-z_]\w*)/gi, (all, type, offset) => {
+		if (insideQuotes(out, offset)) return all;
+		const mapped = mapType(type);
+		return mapped === undefined ? all : `::${mapped}`;
+	});
+	return { sql: out, rewrites, untyped: [...untyped] };
+}
+
+const VALUE_WORDS = /^(?:NULL|TRUE|FALSE|CURRENT_DATE|CURRENT_TIME|CURRENT_TIMESTAMP|LOCALTIME|LOCALTIMESTAMP|SYSDATE)$/i;
+
+function depthAt(sql, index) {
+	let depth = 0;
+	for (let i = 0; i < index; ) {
+		const ch = sql[i];
+		if (ch === "'" || ch === '"' || ch === '`') {
+			i = skipQuoted(sql, i);
+			continue;
+		}
+		if (ch === '(') depth++;
+		else if (ch === ')') depth--;
+		i++;
+	}
+	return depth;
+}
+
+/** Rule D2.
+ * @returns {{ sql: string, aliased: number }} */
+export function aliasDerivedColumns(sql) {
+	const s = String(sql ?? '');
+	const edits = [];
+	const plain = new RegExp(`^(?:${IDENT}\\.)*(${IDENT})$`);
+	for (const m of s.matchAll(/\bSELECT\b/gi)) {
+		if (insideQuotes(s, m.index) || depthAt(s, m.index) === 0) continue;
+		for (const item of projectionSpans(s, m.index, blockEnd(s, m.index))) {
+			const column = item.text.match(plain)?.[1];
+			if (!column || VALUE_WORDS.test(column) || !item.text.includes('.') && SQL_WORDS.has(column.toLowerCase())) continue;
+			edits.push({ at: item.start, length: item.text.length, text: `${item.text} AS ${column}` });
+		}
+	}
+	return { sql: applyEdits(s, edits), aliased: edits.length };
 }

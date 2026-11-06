@@ -7,7 +7,7 @@ import { planConnector, relationParts, isConnectorClass } from './connectors.js'
 import { buildJoinDataflow, buildFusionView, magicJoinType, originKey, refreshesOnUpdate } from './etl.js';
 import { planDatasourceInitialSql, describeInitialSql, initialSqlBlockedMessage } from './initial-sql.js';
 import { buildInitialSqlDataflow } from './initial-sql-etl.js';
-import { UNION_CAST_TYPES, aliasDerivedTables, anchorConstantUnionColumns, expandStarsOverUnions, aliasUnionBranches, castUnionNulls, inlineCtes, matchColumnCaseFully, rewriteToVarchar, projectionNames, rewriteCollate, rewriteDateAdd, rewriteDateDiff, rewriteUnpivot, stripComments } from './view-sql.js';
+import { UNION_CAST_TYPES, aliasDerivedColumns, aliasDerivedTables, anchorConstantUnionColumns, expandStarsOverUnions, aliasUnionBranches, castUnionNulls, inlineCtes, matchColumnCaseFully, projectionNames, rewriteCastTypes, rewriteCollate, rewriteDateAdd, rewriteDateDiff, rewriteFunctions, rewriteUnpivot, stripComments, unsupportedFunctions } from './view-sql.js';
 
 /**
  * @typedef {import('../model/types.js').WorkbookIR} WorkbookIR
@@ -877,11 +877,14 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 		selectString = `${selectString.slice(0, r.start)}\`t${r.table + 1}\`${selectString.slice(r.end)}`;
 	}
 	const ctes = inlineCtes(stripComments(selectString).trim().replace(/;+\s*$/, ''));
-	const unpivot = rewriteUnpivot(aliasDerivedTables(rewriteToVarchar(ctes.sql).sql).sql);
+	const unpivot = rewriteUnpivot(aliasDerivedTables(ctes.sql).sql);
 	const collate = rewriteCollate(unpivot.sql);
 	const dateAdd = rewriteDateAdd(collate.sql);
 	const dateDiff = rewriteDateDiff(dateAdd.sql);
-	const unions = aliasUnionBranches(dateDiff.sql);
+	const functions = rewriteFunctions(dateDiff.sql);
+	const casts = rewriteCastTypes(functions.sql);
+	const derived = aliasDerivedColumns(casts.sql);
+	const unions = aliasUnionBranches(derived.sql);
 	const nulls = castUnionNulls(unions.sql, new Map(columns.map((c) => [String(c.name).toLowerCase(), UNION_CAST_TYPES[c.type]])));
 	const anchored = anchorConstantUnionColumns(nulls.sql);
 	const starred = expandStarsOverUnions(matchColumnCaseFully(anchored.sql).sql);
@@ -895,11 +898,11 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 			object
 		});
 	}
-	if ((dateDiff.rewrites || unions.aliased || nulls.cast || anchored.anchored || starred.expanded) && issues) {
+	if ((dateDiff.rewrites || functions.rewritten.length || casts.rewrites || derived.aliased || unions.aliased || nulls.cast || anchored.anchored || starred.expanded) && issues) {
 		issues.push({
 			severity: 'info',
 			code: 'data.view-sql-rewrite',
-			message: `Custom SQL of '${name}': ${[dateDiff.rewrites ? `${dateDiff.rewrites} DATEDIFF(<part>, a, b) call(s) rewritten as DATEDIFF(b, a) or date-part arithmetic` : '', unions.aliased ? `${unions.aliased} UNION branch column(s) aliased to the first branch's names` : '', nulls.cast ? `${nulls.cast} NULL UNION branch item(s) cast to their column's type` : '', anchored.anchored ? `${anchored.anchored} UNION column(s) that are constant in every branch tied to a table column` : '', starred.expanded ? `${starred.expanded} SELECT * over a UNION written out as its column list` : ''].filter(Boolean).join(', and ')}, since the SQL DataSet View parser rejects the original form.`,
+			message: `Custom SQL of '${name}': ${[dateDiff.rewrites ? `${dateDiff.rewrites} DATEDIFF(<part>, a, b) call(s) rewritten as DATEDIFF(b, a) or date-part arithmetic` : '', functions.rewritten.length ? `${functions.rewritten.join(', ')} rewritten as supported functions` : '', casts.rewrites ? `${casts.rewrites} cast type(s) renamed to a type Domo recognizes` : '', derived.aliased ? `${derived.aliased} derived-table column(s) aliased to the name as written` : '', unions.aliased ? `${unions.aliased} UNION branch column(s) aliased to the first branch's names` : '', nulls.cast ? `${nulls.cast} NULL UNION branch item(s) cast to their column's type` : '', anchored.anchored ? `${anchored.anchored} UNION column(s) that are constant in every branch tied to a table column` : '', starred.expanded ? `${starred.expanded} SELECT * over a UNION written out as its column list` : ''].filter(Boolean).join(', and ')}, since the SQL DataSet View parser rejects the original form.`,
 			object
 		});
 	}
@@ -909,6 +912,33 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 			code: 'data.view-sql-rewrite',
 			message: `Custom SQL of '${name}': ${dateDiff.skipped.length} DATEDIFF() call(s) use a date part with no Domo equivalent and stay as they are, so the view will fail: ${dateDiff.skipped.slice(0, 3).join('; ')}`,
 			object
+		});
+	}
+	const unsupported = unsupportedFunctions(selectString);
+	if (unsupported.length && issues) {
+		issues.push({
+			severity: 'warning',
+			code: 'data.view-sql-unsupported-function',
+			message: `Custom SQL of '${name}' calls ${unsupported.join(', ')}, which the SQL DataSet View validator rejects ("Unsupported function referenced") and t2d has no supported equivalent for, so the view will fail to save.`,
+			object,
+			suggestion: 'Rewrite the calls with functions Domo supports (docs/VIEW-SQL-RULES.md, rule F1), or serve the datasource through Magic ETL.'
+		});
+	}
+	if (functions.approximate.length && issues) {
+		issues.push({
+			severity: 'warning',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}': ${functions.approximate.join(', ')} rewritten as DATE_ADD(<date>, INTERVAL <n> MONTH), which does not keep a month-end date at month end and returns a DATE.`,
+			object
+		});
+	}
+	if (casts.untyped.length && issues) {
+		issues.push({
+			severity: 'warning',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}' casts to ${casts.untyped.join(', ')}, which Domo types as text, so those view columns come out as STRING.`,
+			object,
+			suggestion: 'Cast to TIMESTAMP instead if the time zone offset is not needed.'
 		});
 	}
 	if ((ctes.inlined.length || unpivot.rewrites) && issues) {
@@ -925,7 +955,7 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 		issues.push({
 			severity: 'info',
 			code: 'data.view-sql-dateadd',
-			message: `Custom SQL of '${name}': ${dateAdd.rewrites} DATEADD() call(s) rewritten as DATE_ADD(<date>, INTERVAL <n> <part>), since the SQL DataSet View parser rejects DATEADD.`,
+			message: `Custom SQL of '${name}': ${dateAdd.rewrites} DATEADD() call(s) rewritten as DATE_ADD(<date>, INTERVAL <n> <part>), since the SQL DataSet View parser rejects DATEADD. Domo's Snowflake translation returns a DATE for a part of a day or longer, so a timestamp argument loses its time of day.`,
 			object
 		});
 	}

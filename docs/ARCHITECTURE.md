@@ -372,7 +372,9 @@ grow; positional parameters may not change without updating every caller.
 - Cloud Amplifier manifests plan one `cloud-amplifier` dataset per registered table (columns are the warehouse
   names, so `fieldMap` maps Tableau field ids to them) and an Advanced SQL DataSet View (`buildSqlView`,
   `view.schema.viewTemplate.version: 'advancedEditorSql'`, `tableAliases` as $refs, `cloudId` = integration id)
-  per custom SQL relation; several relations join like uploaded tables.
+  per custom SQL relation; several relations join like uploaded tables. The custom SQL goes through the rewrites in
+  `src/convert/view-sql.js`, each answering a rule of Domo's view validator or Snowflake deparser listed in
+  [VIEW-SQL-RULES.md](VIEW-SQL-RULES.md); a function with no supported equivalent is `data.view-sql-unsupported-function`.
 - Federated manifests plan one `federated` dataset per table (`planFederatedInputs`; columns keep the database names)
   and, for several tables, always a fusion DataSet View (`sourceStrategy: 'federated'`); a join the view cannot express
   is `data.federated-join` (error, only the first table is used), never a Magic ETL DataFlow. Each adds the info issue
