@@ -1,3 +1,28 @@
+const SHEET_WIDTH = 0.82;
+const FILTER_HEIGHT = 0.1;
+
+/** Each published worksheet on no dashboard as a `sheetView` dashboard with its filter cards on the right; tabs in view-list order. */
+export function withSheetViews(ir) {
+	const views = ir?.workbook?.views;
+	if (!Array.isArray(views) || !views.length) return ir;
+	const position = new Map(views.map((v, i) => [v.name, i]));
+	const onDashboard = new Set((ir.dashboards ?? []).flatMap((d) => [...(d.zones ?? []), ...(d.floating ?? [])].map((z) => z.worksheet).filter(Boolean)));
+	const names = new Set([...(ir.dashboards ?? []), ...(ir.stories ?? [])].map((d) => d.name));
+	const sheets = (ir.worksheets ?? []).filter((w) => !w.hidden && position.has(w.name) && !onDashboard.has(w.name) && !names.has(w.name));
+	const order = (item) => ({ ...item, tabIndex: position.has(item.name) ? position.get(item.name) : views.length + (item.tabIndex ?? 0) });
+	const sheetViews = sheets.map((ws) => {
+		const filters = ws.quickFilters ?? [];
+		const width = filters.length ? SHEET_WIDTH : 1;
+		const zones = [
+			{ id: `${ws.name}#sheet`, kind: 'worksheet', worksheet: ws.name, rect: { x: 0, y: 0, w: width, h: 1 }, floating: false },
+			...filters.map((f, i) => ({ id: `${ws.name}#filter${i}`, kind: 'filter', worksheet: ws.name, param: f.pillId, ...(f.mode ? { mode: f.mode } : {}), rect: { x: SHEET_WIDTH, y: i * FILTER_HEIGHT, w: 1 - SHEET_WIDTH, h: FILTER_HEIGHT }, floating: false }))
+		];
+		return { name: ws.name, size: { mode: 'automatic' }, zones, floating: [], sheetView: true, tabIndex: position.get(ws.name) };
+	});
+	if (!sheetViews.length && !(ir.dashboards ?? []).length && !(ir.stories ?? []).length) return ir;
+	return { ...ir, dashboards: [...(ir.dashboards ?? []).map(order), ...sheetViews], ...(ir.stories ? { stories: ir.stories.map(order) } : {}) };
+}
+
 /**
  * The workbook as Tableau publishes it: dashboards and stories that are not views on the server (`ir.workbook.views`,
  * listed at extract) and that no published view opens through a button, action or story point are dropped, and their

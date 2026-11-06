@@ -12,7 +12,7 @@ import { applyDrillInteractions } from './drill.js';
 import { dashboardFilterScopes } from './filters.js';
 import { planCrosstabStacks } from './stack.js';
 import { pageDefaultFilters, planPages, withoutHiddenZones } from './layout.js';
-import { withoutUnpublishedSheets } from './published.js';
+import { withSheetViews, withoutUnpublishedSheets } from './published.js';
 import { resolveParameterModes } from './variables.js';
 import { formatPlanSql } from './sql-format.js';
 import { hiddenScope } from './hidden-members.js';
@@ -354,7 +354,7 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 
 	log.step('Planning datasets', { workbookKey });
 	const published = resolved.unpublished ? { ir, issues: [] } : withoutUnpublishedSheets(ir);
-	const cased = applyMemberCase(withoutHiddenZones(published.ir), manifestIndex(manifests));
+	const cased = applyMemberCase(withoutHiddenZones(withSheetViews(published.ir)), manifestIndex(manifests));
 	const datasetPlan = planDatasets(cased.ir, manifests, { mappings, options: resolved, workbookKey });
 	const blends = planBlends(cased.ir, datasetPlan, { options: resolved, workbookKey });
 	const planned = { ...datasetPlan, datasets: blends.datasets, dataflows: blends.dataflows };

@@ -441,6 +441,7 @@ export const PLAN_VERSION = 1;
  * @property {ZoneIR[]} floating                Floating zones, kept separate
  * @property {number} [tabIndex]                Position among the workbook's tabs (<windows> order)
  * @property {boolean} [hidden]                 Hidden tab
+ * @property {boolean} [sheetView]              A published worksheet on no dashboard, laid out as its own view (withSheetViews)
  * @property {ContainerIR[]} [containers]       Layout containers, document order; zones and containers name theirs in `parent`
  * @property {string[]} [roots]                 Ids of the root zones and containers
  * @property {{ text: string, runs?: TextRunIR[] }} [title]  Custom dashboard title (Format > Title), `<Sheet Name>` filled in

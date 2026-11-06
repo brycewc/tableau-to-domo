@@ -1467,7 +1467,7 @@ function planDashboard(ir, dash, pageKey, cardsBySheet, bindings, options, filte
 	const scopes = dashboardFilterScopes(ir).get(dash.name) ?? [];
 	const scopeSheets = (zone) => new Set(scopes.find((s) => s.members.get(zone.worksheet) === zone.param)?.members.keys() ?? [zone.worksheet]);
 	const px = dashboardPixels(dash);
-	if (dash.size?.mode !== 'fixed') {
+	if (dash.size?.mode !== 'fixed' && !dash.sheetView) {
 		issues.push(makeIssue(dash, 'info', 'layout.size', `Dashboard sizing is ${dash.size?.mode ?? 'automatic'}; laid out as ${px.width}x${px.height}px`));
 	}
 	let entries = [];

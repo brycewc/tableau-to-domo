@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { withoutUnpublishedSheets } from '../../src/convert/published.js';
+import { withSheetViews, withoutUnpublishedSheets } from '../../src/convert/published.js';
 
 const zone = (worksheet) => ({ kind: 'worksheet', worksheet });
 const ir = (views) => ({
@@ -30,4 +30,18 @@ test('without a view list, or with everything published, the workbook is unchang
 	assert.equal(withoutUnpublishedSheets(none).ir, none);
 	const all = ir(['Details', 'RollUp', 'Target', 'Old Story', 'Sheet 6', 'tab_sheet'].map((name) => ({ name })));
 	assert.deepEqual(withoutUnpublishedSheets(all).issues, []);
+});
+
+test('a published worksheet on no dashboard becomes a view of its own, with its filter cards, in view-list order', () => {
+	const out = withSheetViews({
+		workbook: { name: 'Trend', views: [{ name: 'New Business' }, { name: 'Summary' }, { name: 'Renewal' }] },
+		dashboards: [{ name: 'Summary', zones: [{ kind: 'worksheet', worksheet: 'kpi' }], floating: [], tabIndex: 7 }],
+		worksheets: [{ name: 'Renewal' }, { name: 'New Business', quickFilters: [{ pillId: '[ds].[none:Region:nk]', mode: 'checkdropdown' }] }, { name: 'kpi' }, { name: 'Draft', hidden: true }]
+	});
+	assert.deepEqual(out.dashboards.map((d) => [d.name, d.tabIndex, Boolean(d.sheetView)]).sort((a, b) => a[1] - b[1]), [['New Business', 0, true], ['Summary', 1, false], ['Renewal', 2, true]]);
+	const nb = out.dashboards.find((d) => d.name === 'New Business');
+	assert.deepEqual(nb.zones.map((z) => [z.kind, z.worksheet, z.param, z.mode]), [['worksheet', 'New Business', undefined, undefined], ['filter', 'New Business', '[ds].[none:Region:nk]', 'checkdropdown']]);
+	assert.equal(out.dashboards.find((d) => d.name === 'Renewal').zones[0].rect.w, 1, 'a sheet with no filter cards takes the whole view');
+	const none = { workbook: { name: 'x' }, dashboards: [], worksheets: [{ name: 'a' }] };
+	assert.equal(withSheetViews(none), none);
 });
