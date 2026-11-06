@@ -261,24 +261,25 @@ export async function getFilterView(c, id) {
 	return c.get(`${ANALYZER}/analyzer/${encodeURIComponent(id)}`);
 }
 
-function filterViewBody(name, filters) {
-	return { name, type: 'NAMED', scope: 'PAGE', filters, segmentIds: [], dateTimeRange: { overrideDateRange: false }, functionOverrides: {} };
+function filterViewBody(name, filters, dateRange) {
+	const dateTimeRange = dateRange ? { dateTimeRange: dateRange, overrideDateRange: true } : { overrideDateRange: false };
+	return { name, type: 'NAMED', scope: 'PAGE', filters, segmentIds: [], dateTimeRange, functionOverrides: {} };
 }
 
 /**
  * Create a page-scoped named filter view (scope PAGE needs page edit rights).
  * @returns {Promise<number>} its analyzerId
  */
-export async function createFilterView(c, pageId, { name, filters }) {
-	const res = await c.post(`${ANALYZER}/${encodeURIComponent(pageId)}/analyzer`, filterViewBody(name, filters), { idempotent: false });
+export async function createFilterView(c, pageId, { name, filters, dateRange }) {
+	const res = await c.post(`${ANALYZER}/${encodeURIComponent(pageId)}/analyzer`, filterViewBody(name, filters, dateRange), { idempotent: false });
 	const id = res?.analyzerId;
 	if (id === undefined || id === null) throw new Error(`createFilterView: response had no analyzerId: ${JSON.stringify(res).slice(0, 300)}`);
 	return id;
 }
 
 /** Replace a named filter view's name and filters, leaving the caller's own page filter state alone. */
-export async function updateFilterView(c, pageId, id, { name, filters }) {
-	return c.put(`${ANALYZER}/${encodeURIComponent(pageId)}/analyzer`, { ...filterViewBody(name, filters), analyzerId: id }, { query: { removePersonalized: false } });
+export async function updateFilterView(c, pageId, id, { name, filters, dateRange }) {
+	return c.put(`${ANALYZER}/${encodeURIComponent(pageId)}/analyzer`, { ...filterViewBody(name, filters, dateRange), analyzerId: id }, { query: { removePersonalized: false } });
 }
 
 /** Make a named filter view the page default for every user (PageAnalyzerServiceV3.saveAsGlobal). */

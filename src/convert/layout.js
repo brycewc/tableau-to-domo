@@ -4,7 +4,7 @@ import { stripBrackets } from '../model/naming.js';
 import { parsePillId } from '../tableau/twb/shelf.js';
 import { buildCardBody, fieldlessSheetIssue, naturalOrderKey } from './cards.js';
 import { fieldColumnFormat } from './number-format.js';
-import { aggregateFilterField, bindingExpression, dashboardFilterScopes, isAggregateControl, toCardFilters, filterDataType, refOf } from './filters.js';
+import { aggregateFilterField, bindingExpression, dashboardFilterScopes, isAggregateControl, toCardFilters, filterDataType, refOf, relativeDateRange } from './filters.js';
 import { variableControl } from './variables.js';
 import { resolveTitle } from './titles.js';
 import { BUTTON_HEIGHT, SECTION_BAR_HEIGHT, actionIssues, applyCardActions, buildAppLayout, buttonBox, filterSection, groupSections, headerBand, linkedPageKeys, navigationButton, planItemStyles, planStoryLayout, sectionIssues, sheetButton, titleBand, toggleSections, webPageButton, webViewButton, workbookTheme, workbookTableStyle, controlItemStyle, opaqueHex, zoneItemStyle } from './app-layout.js';
@@ -1057,7 +1057,12 @@ export function filterCardFor(zone, filter, binding, datasetKey, dash, workbookK
 		groupBy = [{ ...r }];
 		orderBy = [{ ...r, order: 'ASCENDING' }];
 		const expr = dataType === 'string' && bindingExpression(binding);
-		if (expr) {
+		const calendar = /^(DAYNAME|MONTHNAME)\((.*)\)$/s.exec(binding.expression ?? '');
+		if (field?.datePartOf && calendar) {
+			const id = 'calculation_card_1';
+			formulas.push({ id, name: `${label} (calendar order)`, formula: `MIN(${calendar[1] === 'DAYNAME' ? 'DAYOFWEEK' : 'MONTH'}(${calendar[2]}))`, templateId: -1, status: 'VALID', dataType: 'numeric', isCalculation: true, aggregated: true, persistedOnDataSource: false });
+			orderBy = [{ column: id, formulaId: id, order: 'ASCENDING' }];
+		} else if (expr) {
 			const id = 'calculation_card_1';
 			formulas.push({ id, name: `${label} (natural order)`, formula: naturalOrderKey(expr, { perGroup: true }), templateId: -1, status: 'VALID', dataType: 'string', isCalculation: true, aggregated: true, persistedOnDataSource: false });
 			orderBy = [{ column: id, formulaId: id, order: 'ASCENDING' }];
@@ -1463,6 +1468,7 @@ function phoneOrder(dash, entries) {
 function planDashboard(ir, dash, pageKey, cardsBySheet, bindings, options, filterCardsByKey, workbookKey, { variables, inlineParameters, textLimit = MAX_HEADER_TEXT, app, labelCards, statusSheets, statusNotes, links, extraCards = [], stacks, beastModes = [] } = {}) {
 	const issues = [];
 	const pageFilters = [];
+	let dateRange;
 	const aggregateFilterEntries = [];
 	const scopes = dashboardFilterScopes(ir).get(dash.name) ?? [];
 	const scopeSheets = (zone) => new Set(scopes.find((s) => s.members.get(zone.worksheet) === zone.param)?.members.keys() ?? [zone.worksheet]);
@@ -1796,6 +1802,14 @@ function planDashboard(ir, dash, pageKey, cardsBySheet, bindings, options, filte
 					issues.push(makeIssue(dash, 'warning', 'layout.filter-zone', `Filter control on ${label} has no Domo column; left off the page`));
 					return;
 				}
+				if (app && filter.kind === 'relative-date') {
+					const { range } = relativeDateRange(filter.relative ?? {});
+					if (!dateRange) {
+						dateRange = range;
+						issues.push(makeIssue(dash, 'info', 'layout.date-range', `Relative date filter on ${label} is the view's date control, defaulting to the Tableau range; it has no filter card`));
+					} else issues.push(makeIssue(dash, 'info', 'layout.date-range', `Relative date filter on ${label} has no filter card: the view's date control already takes another relative date filter's range`));
+					return;
+				}
 				if (options.createFilterCards === false) {
 					const result = pageFiltersFor(filter, bindings, datasetKey, dash);
 					pageFilters.push(...result.filters);
@@ -1957,7 +1971,7 @@ function planDashboard(ir, dash, pageKey, cardsBySheet, bindings, options, filte
 	entries = tileEntries(entries);
 	const phone = phoneOrder(dash, entries);
 	if (phone) issues.push(makeIssue(dash, 'info', 'layout.phone-layout', `The phone layout follows Tableau's custom phone layout${phone.missing ? `; ${phone.missing} item(s) it leaves out are at the end (a Domo layout shows every item on both templates)` : ''}`));
-	return { layout: app ? buildAppLayout(entries) : buildLayout(entries), filters: pageFilters, issues, webLinks };
+	return { layout: app ? buildAppLayout(entries) : buildLayout(entries), filters: pageFilters, issues, webLinks, ...(dateRange ? { dateRange } : {}) };
 }
 
 // Unscoped, Domo applies the selection to every card on the dataset at its own grain, emptying the other filter cards (live).
@@ -2208,6 +2222,7 @@ export function planPages(workbookIr, cards, bindings, { options = {}, workbookK
 			? { key, title: capTitle(dash.name, { type: 'dashboard', name: dash.name }, issues), appKey: rootKey, dashboard: dash.name, layout: result.layout, ...(dash.hidden ? { hidden: true } : {}) }
 			: { key, title: `${prefix}${dash.name}`, parentKey: rootKey, dashboard: dash.name, layout: result.layout };
 		if (result.filters.length) page.filters = result.filters;
+		if (result.dateRange) page.dateRange = result.dateRange;
 		if (result.webLinks.length) page.webLinks = result.webLinks;
 		if (!result.layout.content.length) issues.push(makeIssue(dash, 'warning', 'layout.empty', `Dashboard ${dash.name} has nothing that converts to a Domo page item`));
 		pages.push(page);

@@ -183,7 +183,7 @@ export function parseFilter(node, ctx) {
 	}
 	if (cls === 'relative-date') {
 		const relative = {
-			periodType: node.attr('period-type') || 'day',
+			periodType: node.attr('period-type-v2') || node.attr('period-type') || 'day',
 			first: Number(node.attr('first-period') ?? 0),
 			last: Number(node.attr('last-period') ?? 0)
 		};

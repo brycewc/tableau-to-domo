@@ -285,7 +285,7 @@ export function parseParameters(node) {
 			const granularity = range.attr('granularity');
 			if (granularity !== undefined) {
 				const step = Number(granularity);
-				const period = range.attr('period-type');
+				const period = range.attr('period-type-v2') ?? range.attr('period-type');
 				param.range.step = period ? `${granularity} ${period}` : Number.isNaN(step) ? granularity : step;
 			}
 		}

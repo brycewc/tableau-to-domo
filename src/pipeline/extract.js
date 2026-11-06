@@ -572,6 +572,15 @@ async function mergePublishedDefinition({ ws, t, client, ir, ds, sharedCache, re
 		return undefined;
 	}
 	const { added, filled } = t.mergePublishedDefinitions(ds, definition);
+	const renamed = publishedParameterIds(ir, definition, ds);
+	if (renamed.length) {
+		ir.issues.push({
+			severity: 'info',
+			code: 'extract.published-parameter-renamed',
+			message: `Published datasource "${name}" has parameters whose ids the workbook uses for other parameters, so its calculations read them under the workbook's ids: ${renamed.map(([from, to]) => `${from} -> ${to}`).join(', ')}.`,
+			object
+		});
+	}
 	const known = new Set((ir.parameters ??= []).map((prm) => prm.id));
 	const parameters = (definition.parameters ?? []).filter((prm) => !known.has(prm.id));
 	if (parameters.length) {
@@ -594,6 +603,31 @@ async function mergePublishedDefinition({ ws, t, client, ir, ds, sharedCache, re
 		});
 	}
 	return definition;
+}
+
+// Tableau renames a published datasource's parameter whose id the workbook uses (Metric [Parameter 2] is [Parameter 2 2])
+// while its calcs keep the id; point them at the same-named workbook parameter, else add it under a free id.
+export function publishedParameterIds(ir, definition, ds) {
+	const params = (ir.parameters ??= []);
+	const pairs = [];
+	for (const prm of definition.parameters ?? []) {
+		const same = params.find((x) => x.id === prm.id);
+		if (!same || same.name === prm.name) continue;
+		let target = params.find((x) => x.name === prm.name && x.datatype === prm.datatype);
+		if (!target) {
+			let n = 1;
+			const base = prm.id.replace(/\]$/, '');
+			while (params.some((x) => x.id === `${base} ${n}]`)) n += 1;
+			target = { ...structuredClone(prm), id: `${base} ${n}]` };
+			params.push(target);
+		}
+		pairs.push([prm.id, target.id]);
+	}
+	if (!pairs.length) return pairs;
+	const swap = (text) => pairs.reduce((out, [from, to]) => out.split(from).join(to), text);
+	const published = new Set((definition.fields ?? []).map((f) => f.id));
+	ds.fields = (ds.fields ?? []).map((f) => (typeof f.formula === 'string' && published.has(f.id) ? { ...f, formula: swap(f.formula) } : f));
+	return pairs;
 }
 
 function extractFailedIssue(ds, err) {

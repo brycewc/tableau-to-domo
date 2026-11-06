@@ -44,7 +44,7 @@ export function withDatePartFilterFields(ir) {
 				const unit = pill.datePart === 'weekday' ? 'weekday' : pill.datePart;
 				added.set(`${f.datasourceId}\u0000${id}`, {
 					datasourceId: f.datasourceId,
-					field: { id, name, caption: name, datatype: part.datatype, role: 'dimension', type: 'ordinal', kind: 'calculated', formula: `${part.fn}('${unit}', [${bare(f.fieldId)}])`, ...(field.fiscalYearStart ? { fiscalYearStart: field.fiscalYearStart } : {}) }
+					field: { id, name, caption: name, datatype: part.datatype, role: 'dimension', type: 'ordinal', kind: 'calculated', formula: `${part.fn}('${unit}', [${bare(f.fieldId)}])`, datePartOf: pill.datePart, ...(field.fiscalYearStart ? { fiscalYearStart: field.fiscalYearStart } : {}) }
 				});
 			}
 			const pillId = `[${f.datasourceId}].[none:${bare(id)}:${part.datatype === 'string' ? 'nk' : 'ok'}]`;

@@ -283,6 +283,7 @@ export const PLAN_VERSION = 1;
  * @property {number} [fiscalYearStart]         date/datetime: month 1-12 its fiscal year starts in (the column's own
  *                                              `fiscal-year-start`, else the datasource's). Tableau names a fiscal year by
  *                                              the year it ends: with 12, 2025-12-01 is in FY2026
+ * @property {DatePart} [datePartOf]            t2d's own field holding a date part a filter control shows (withDatePartFilterFields)
  */
 
 /**
@@ -740,7 +741,9 @@ export const PLAN_VERSION = 1;
  * @property {LayoutPlan} [layout]
  * @property {PageFilterPlan[]} [filters]       Page-level default filters: push writes them as the page's "Default" filter view,
  *                                              the page default for all users
- * @property {string} [appKey]                  Set when the page is an App Studio view of plan.app
+ * @property {Object} [dateRange]               App view date control default (a Domo DateTimeRange from a relative date
+ *                                              filter card), written into the same "Default" filter view
+ * @property {string} [appKey]                 Set when the page is an App Studio view of plan.app
  * @property {number} [navOrder]                View position in the app navigation (1-based)
  * @property {boolean} [hidden]                 Tableau-hidden dashboard: the view is hidden in the navigation
  * @property {boolean} [linked]                 hidden and opened by a button or card action: the view stays visible and only

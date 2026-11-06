@@ -386,7 +386,7 @@ export function missingDependencies(plan, writes, exists) {
 			if (page.appKey) needs.push([`page:${page.key}`, `app:${page.appKey}`]);
 		}
 		if (page.layout && writes('layout', page.key)) needs.push([`layout:${page.key}`, `page:${page.key}`]);
-		if (page.filters?.length && writes('filterview', page.key)) needs.push([`filterview:${page.key}`, `page:${page.key}`]);
+		if ((page.filters?.length || page.dateRange) && writes('filterview', page.key)) needs.push([`filterview:${page.key}`, `page:${page.key}`]);
 	}
 	for (const card of plan.cards ?? []) {
 		if (!writes('card', card.key) || card.status === 'unsupported' || card.kind === 'notebook' || card.kind === 'image') continue;
@@ -2685,7 +2685,7 @@ async function pushPlanUnlocked({
 	timer.phase('filter-views', kinds.has('layouts'));
 	/* 7b. Page default filters: the Tableau filter selections as each page's "Default" filter view, the page default for all users. */
 	if (kinds.has('layouts')) {
-		const withFilters = (plan.pages ?? []).filter((pg) => writes('filterview', pg.key) && (pg.filters?.length || getEntry(state, `filterview:${pg.key}`)));
+		const withFilters = (plan.pages ?? []).filter((pg) => writes('filterview', pg.key) && (pg.filters?.length || pg.dateRange || getEntry(state, `filterview:${pg.key}`)));
 		if (withFilters.length) emitter.step('Page filters');
 		for (const page of withFilters) await pushFilterView(page);
 	}
@@ -2717,14 +2717,16 @@ async function pushPlanUnlocked({
 		try {
 			const pageId = resolve({ $ref: `page:${page.key}` });
 			const filters = pageFilterBody(page);
-			const hash = shortHash({ name, filters });
+			const dateRange = page.dateRange;
+			const empty = !filters.length && !dateRange;
+			const hash = shortHash(dateRange ? { name, filters, dateRange } : { name, filters });
 			if (dryRun) {
-				await record({ ...base, action: !filters.length ? 'delete' : entry ? (changed(entry, hash) ? 'update' : 'unchanged') : 'create', id: entry?.id ?? placeholder(ref), status: 'dry-run', notes: [`${filters.length} filter(s)`] });
+				await record({ ...base, action: empty ? 'delete' : entry ? (changed(entry, hash) ? 'update' : 'unchanged') : 'create', id: entry?.id ?? placeholder(ref), status: 'dry-run', notes: [`${filters.length} filter(s)${dateRange ? ', a date range' : ''}`] });
 				return;
 			}
 			const views = await d.pages.listFilterViews(c, pageId);
 			const mine = entry && views.find((v) => String(v.analyzerId) === String(entry.id));
-			if (!filters.length) {
+			if (empty) {
 				if (mine) await d.pages.deleteFilterView(c, mine.analyzerId);
 				delete state.objects[ref];
 				await record({ ...base, action: 'delete', id: entry?.id ?? null, status: 'ok', notes: mine ? [] : ['already gone'] });
@@ -2748,7 +2750,7 @@ async function pushPlanUnlocked({
 			};
 			if (mine) {
 				const isChanged = changed(entry, hash);
-				if (isChanged) await d.pages.updateFilterView(c, pageId, mine.analyzerId, { name, filters });
+				if (isChanged) await d.pages.updateFilterView(c, pageId, mine.analyzerId, { name, filters, dateRange });
 				await makeDefault(mine, mine.analyzerId);
 				setEntry(state, ref, { id: mine.analyzerId, hash, extra: { pageId } });
 				await record({ ...base, action: isChanged ? 'update' : 'unchanged', id: mine.analyzerId, status: 'ok', notes });
@@ -2774,7 +2776,7 @@ async function pushPlanUnlocked({
 				await record({ ...base, action: 'reuse', id: sameName.analyzerId, status: 'ok', notes: [...notes, `the existing "${name}" filter view has the same filters`] });
 				return;
 			}
-			const id = await d.pages.createFilterView(c, pageId, { name, filters });
+			const id = await d.pages.createFilterView(c, pageId, { name, filters, dateRange });
 			setEntry(state, ref, { id, hash, extra: { pageId } });
 			await makeDefault(undefined, id);
 			await record({ ...base, action: 'create', id, status: 'ok', notes });

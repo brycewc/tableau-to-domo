@@ -184,3 +184,8 @@ test('set filters in members-of-set mode: bare, or a level on the set source; In
 	const [dated] = filter(`<filter class='categorical' column='${DS}.[yr:Order Date:ok]'><groupfilter function='member' level='[yr:Order Date:ok]' member='2016' /></filter>`);
 	assert.equal(dated.memberLevel, undefined, 'a derivation of the same field is no other level');
 });
+
+test("a relative date filter's period-type-v2 is its period", () => {
+	const [f] = filter(`<filter class='relative-date' column='${DS}.[none:Order Date:qk]' first-period='-1' include-future='true' include-null='false' last-period='0' period-type-v2='quarter' />`);
+	assert.equal(f.relative.periodType, 'quarter');
+});

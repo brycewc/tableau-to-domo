@@ -217,6 +217,16 @@ test('a floating title over a dropped image is the top row; a floating item over
 	assert.deepEqual(tilingGaps(standard.template, 60), { empty: 0, overlapping: 0 });
 });
 
+test('in an app, a relative date filter control is the view date control default, not a filter card', () => {
+	const shipped = { pillId: p('none', 'Ship Date', 'qk'), datasourceId: DS, fieldId: '[Ship Date]', kind: 'relative-date', relative: { periodType: 'quarter', first: -1, last: 0 } };
+	const s = sheet({ name: 'S', cols: CATEGORY, rows: SALES, filters: [shipped] });
+	const dash = { name: 'D', size: { mode: 'automatic' }, zones: [zone('1', 'worksheet', { x: 0, y: 0, w: 0.8, h: 1 }, { worksheet: 'S' }), zone('2', 'filter', { x: 0.8, y: 0, w: 0.2, h: 0.2 }, { worksheet: 'S', param: shipped.pillId })], floating: [] };
+	const { pages, cards, issues } = plan({ worksheets: [s], dashboards: [dash], options: { target: 'app' } });
+	assert.deepEqual(pages[0].dateRange, { dateTimeRangeType: 'ROLLING_PERIOD', interval: 'QUARTER', count: 2, offset: 0 });
+	assert.ok(!cards.some((c) => /selector/.test(c.chartType)));
+	assert.ok(issues.some((i) => i.code === 'layout.date-range'));
+});
+
 test('filter zones become filter cards placed in the layout, reused across dashboards', () => {
 	const region = cat('Region', ['East']);
 	const date = { pillId: p('none', 'Order Date', 'qk'), datasourceId: DS, fieldId: '[Order Date]', kind: 'range-date', min: '2023-01-01', max: '2023-12-31' };
