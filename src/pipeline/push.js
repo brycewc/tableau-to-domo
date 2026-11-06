@@ -5,7 +5,7 @@ import { PLAN_VERSION } from '../model/types.js';
 import { createEmitter } from '../util/events.js';
 import { createTimer } from '../util/timing.js';
 import { imageInfo } from '../util/image.js';
-import { shortHash } from '../util/ids.js';
+import { shortHash, slugify } from '../util/ids.js';
 import { collectRefs, isRef, resolveRefs } from '../util/refs.js';
 import { KIND_GROUP, hasObjectSelection, keyMatcher, mentions, normalizeSelection, planColumns, selectPlan } from '../convert/select.js';
 import { bindVariables, variableControl, variableExpression } from '../convert/variables.js';
@@ -59,7 +59,7 @@ const KIND_ALIASES = {
  * @property {'dataset'|'dataflow'|'variable'|'beastmode'|'app'|'page'|'card'|'layout'|'filterview'|'navigation'} kind
  * @property {string} key
  * @property {string} [name]
- * @property {'create'|'register'|'update'|'unchanged'|'reuse'|'skip'|'delete'} action  delete: a card pushed earlier that convert now marks unsupported
+ * @property {'create'|'register'|'update'|'unchanged'|'reuse'|'skip'|'delete'|'retire'} action  delete: a card pushed earlier that convert now marks unsupported; retire: a dataflow or its output the plan dropped, kept for unpush
  * @property {string|number|null} id
  * @property {'ok'|'failed'|'skipped'|'dry-run'} status
  * @property {string} [error]
@@ -985,6 +985,7 @@ async function pushPlanUnlocked({
 	timer.phase('dataflows', kinds.has('dataflows'));
 	/* 2. Dataflows, then the datasets they output. */
 	if (kinds.has('dataflows')) {
+		if (wholePlan) await retireDataflows();
 		const dataflows = (plan.dataflows ?? []).filter((df) => writes('dataflow', df.key));
 		if (dataflows.length) emitter.step('DataFlows');
 		for (const df of dataflows) {
@@ -992,10 +993,12 @@ async function pushPlanUnlocked({
 			const entry = getEntry(state, ref);
 			const base = { kind: 'dataflow', key: df.key, name: df.name };
 			const outputs = (df.outputDatasetKeys ?? []).map((k) => dsByKey.get(k)).filter(Boolean);
+			const outputEntry = (o) => (superseded.has(`dataset:${o.key}`) ? undefined : getEntry(state, `dataset:${o.key}`));
+			if (!dryRun) for (const r of [ref, ...outputs.map((o) => `dataset:${o.key}`)]) unretire(r);
 			try {
 				const def = resolve(df.definition);
 				const hash = shortHash(def);
-				const outputMissing = !outputs.every((o) => getEntry(state, `dataset:${o.key}`));
+				const outputMissing = !outputs.every((o) => outputEntry(o));
 				const isChanged = changed(entry, hash) || (Boolean(entry) && outputMissing);
 				const action = entry ? (isChanged ? 'update' : 'unchanged') : 'create';
 				const inputsRefreshed = [...collectRefs(df.definition)].some((r) => refreshed.has(r));
@@ -1005,8 +1008,8 @@ async function pushPlanUnlocked({
 					await record({ ...base, action, id, status: 'dry-run', notes: run ? ['run and wait'] : [] });
 					for (const o of outputs) {
 						const oref = `dataset:${o.key}`;
-						const oid = getEntry(state, oref)?.id ?? placeholder(oref);
-						await record({ kind: 'dataset', key: o.key, name: o.name, action: getEntry(state, oref) ? 'reuse' : 'create', id: oid, status: 'dry-run', notes: [`output of dataflow ${df.key}`] });
+						const oid = outputEntry(o)?.id ?? placeholder(oref);
+						await record({ kind: 'dataset', key: o.key, name: o.name, action: outputEntry(o) ? 'reuse' : 'create', id: oid, status: 'dry-run', notes: [`output of dataflow ${df.key}`] });
 					}
 					continue;
 				}
@@ -1016,7 +1019,7 @@ async function pushPlanUnlocked({
 					response = await d.dataflows.createDataflow(c, def);
 					id = idOf(response, 'id');
 					if (id == null) throw new Error('createDataflow returned no id');
-					setEntry(state, ref, { id, hash });
+					setEntry(state, ref, { id, hash, extra: { workbooks: [slug] } });
 					await checkpoint();
 				} else if (isChanged) {
 					response = await d.dataflows.updateDataflow(c, id, def);
@@ -1081,7 +1084,76 @@ async function pushPlanUnlocked({
 			const prev = getEntry(state, oref);
 			if (prev && String(prev.id) !== String(id)) settleStrategy(o, oref, prev);
 			setEntry(state, oref, { id, extra: { strategy: 'dataflow-output', dataflowKey: df.key } });
+			unretire(oref);
 		});
+	}
+
+	function unretire(ref) {
+		if (state.objects[ref]?.extra?.retiredAt) delete state.objects[ref].extra.retiredAt;
+	}
+
+	// Like a dataset whose strategy changed, a dropped dataflow and its outputs stay in Domo, stamped so unpush removes them.
+	// An entry with no workbook stamp is claimed only when its key is in this workbook's key namespace.
+	async function retireDataflows() {
+		const workbookKey = slugify(plan.source?.luid || plan.source?.workbook || '');
+		const planned = new Set((plan.dataflows ?? []).map((df) => `dataflow:${df.key}`));
+		const plannedAs = new Map(datasetPlans.map((ds) => [`dataset:${ds.key}`, ds.strategy]));
+		const keyOfRef = (ref) => ref.slice(ref.indexOf(':') + 1);
+		const ours = (ref, entry) => {
+			const stamps = entry.extra?.workbooks ?? [];
+			return stamps.length ? stamps.includes(slug) : Boolean(workbookKey) && keyOfRef(ref).startsWith(`${workbookKey}.`);
+		};
+		const stale = Object.entries(state.objects).filter(([ref, entry]) => ref.startsWith('dataflow:') && !planned.has(ref) && !entry.extra?.retiredAt && !entry.extra?.adopted && ours(ref, entry));
+		if (stale.length) emitter.step('Retired DataFlows');
+		const retiredAt = new Date().toISOString();
+		for (const [ref, entry] of stale) {
+			const key = keyOfRef(ref);
+			const outputs = Object.entries(state.objects).filter(([r, e]) => r.startsWith('dataset:') && e.extra?.strategy === 'dataflow-output' && e.extra.dataflowKey === key && !e.extra.retiredAt);
+			const others = (entry.extra?.workbooks ?? []).filter((w) => w !== slug);
+			if (others.length) {
+				if (!dryRun) {
+					setEntry(state, ref, { extra: { workbooks: others } });
+					for (const [r, e] of outputs) if (e.extra.workbooks?.includes(slug)) setEntry(state, r, { extra: { workbooks: e.extra.workbooks.filter((w) => w !== slug) } });
+				}
+				continue;
+			}
+			const notes = ['no longer in the plan; kept in Domo and in state so unpush removes it'];
+			if (!entry.extra?.workbooks?.length) notes.push(`recorded without a workbook stamp; claimed because its key is in the "${workbookKey}" namespace`);
+			if (!dryRun) setEntry(state, ref, { extra: { retiredAt } });
+			await record({ kind: 'dataflow', key, name: key, action: 'retire', id: entry.id, status: dryRun ? 'dry-run' : 'ok', notes });
+			const retiredOutputs = [];
+			for (const [r, e] of outputs) {
+				const outputOthers = (e.extra.workbooks ?? []).filter((w) => w !== slug);
+				if (outputOthers.length) {
+					if (!dryRun && e.extra.workbooks.includes(slug)) setEntry(state, r, { extra: { workbooks: outputOthers } });
+					continue;
+				}
+				const strategy = plannedAs.get(r);
+				if (strategy && strategy !== 'dataflow-output') continue;
+				let outRef = r;
+				if (strategy) {
+					outRef = `${r}~dataflow-output-${shortHash(String(e.id))}`;
+					if (dryRun) superseded.add(r);
+					else {
+						state.objects[outRef] = { ...e, extra: { ...e.extra, retiredAt } };
+						delete state.objects[r];
+					}
+				} else if (!dryRun) {
+					setEntry(state, r, { extra: { retiredAt } });
+				}
+				retiredOutputs.push([outRef, e.id]);
+				const outNotes = [`output of retired dataflow ${key}; kept so unpush removes it`];
+				if (strategy) outNotes.push(`another dataflow now builds "${keyOfRef(r)}", so this one is recorded as ${outRef}`);
+				await record({ kind: 'dataset', key: keyOfRef(outRef), name: dsByKey.get(keyOfRef(r))?.name ?? keyOfRef(r), action: 'retire', id: e.id, status: dryRun ? 'dry-run' : 'ok', notes: outNotes });
+			}
+			summary.issues.push({
+				severity: 'warning',
+				code: 'push.dataflow-retired',
+				message: `DataFlow "${key}" (${entry.id}) is no longer in the plan. It was not deleted${retiredOutputs.length ? `, nor its output dataset(s) ${retiredOutputs.map(([, id]) => id).join(', ')}` : ''}, and still runs when its inputs update.`,
+				object: { type: 'dataflow', name: key, id: entry.id },
+				suggestion: `Remove it with t2d unpush --workbook ${slug} --keys ${[ref, ...retiredOutputs.map(([r]) => r)].join(',')} (or a full unpush), or delete it in Domo.`
+			});
+		}
 	}
 
 	timer.phase('variables', kinds.has('variables'));
@@ -2811,7 +2883,7 @@ async function pushPlanUnlocked({
 	const failedCount = summary.counts['status:failed'] || 0;
 	const skippedCount = summary.counts['status:skipped'] || 0;
 	emitter.done(
-		`${dryRun ? 'Dry run' : 'Push'} finished: ${summary.counts.create || 0} create, ${summary.counts.update || 0} update, ${summary.counts.unchanged || 0} unchanged, ${summary.counts.delete ? `${summary.counts.delete} delete, ` : ''}${failedCount} failed, ${skippedCount} skipped`,
+		`${dryRun ? 'Dry run' : 'Push'} finished: ${summary.counts.create || 0} create, ${summary.counts.update || 0} update, ${summary.counts.unchanged || 0} unchanged, ${summary.counts.delete ? `${summary.counts.delete} delete, ` : ''}${summary.counts.retire ? `${summary.counts.retire} retire, ` : ''}${failedCount} failed, ${skippedCount} skipped`,
 		{ counts: summary.counts, log: ws.relative(logFile), ms: summary.timing.ms }
 	);
 	return summary;
