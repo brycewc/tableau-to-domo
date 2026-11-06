@@ -1273,3 +1273,25 @@ test('a table calculation along a combined level partitions by the level columns
 	assert.equal(formulas.card.find((f) => f.id === value.formulaId).formula, 'SUM(`Sales`) / NULLIF(SUM(SUM(`Sales`)) OVER (PARTITION BY `Region`, `Segment`), 0)');
 	assert.deepEqual(subscriptions.main.groupBy.map((g) => g.column), ['calculation_card_1', 'Segment', 'Region', 'Category']);
 });
+
+test('a total bar with a line per member gets one card formula per member', () => {
+	const ws = sheet({
+		name: 'Sales Trend',
+		cols: p('none', 'Category'),
+		rows: `${SALES} + ${SALES}`,
+		panes: [
+			{ markClass: 'Bar', encodings: {} },
+			{ markClass: 'Bar', yAxisPill: SALES, encodings: {} },
+			{ markClass: 'Line', yAxisPill: SALES, encodings: { color: [REGION] } }
+		]
+	});
+	ws.color = { pillId: REGION, type: 'palette', members: [{ value: 'East' }, { value: "O'Hare" }] };
+	const { cards } = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} });
+	const def = cards[0].body.definition;
+	assert.equal(def.charts.main.chartType, 'badge_vert_bar_line');
+	assert.equal(def.charts.main.overrides.set_line_count, '2');
+	const series = def.subscriptions.main.columns.filter((c) => c.mapping === 'SERIES');
+	assert.deepEqual(series.map((c) => c.alias ?? c.column), ['Sales', 'East', "O'Hare"]);
+	const formulas = new Map(def.formulas.card.map((f) => [f.id, f.formula]));
+	assert.equal(formulas.get(series[2].formulaId), "SUM(CASE WHEN `Region` = 'O''Hare' THEN `Sales` END)");
+});

@@ -162,3 +162,17 @@ test('a filled title row (sectionFill) points at a section style of that color, 
 	assert.equal(fillOf(theme, sectionOf(theme, again2.style.sourceId)), '#19429C');
 	assert.equal(theme.sections.filter((s) => s.background?.value === sectionOf(theme, again2.style.sourceId).background.value).length, 1);
 });
+
+test('a table style mapped onto a card that is no longer a table is left off, not sent', async () => {
+	const { ws, config } = await setup(colorPlan());
+	const { deps, calls, server } = stubAppDomo();
+	await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
+	const state = await loadState(ws, 'acme');
+	const theme = server.apps.get(String(state.objects['app:root'].id)).theme;
+	theme.tables = [...(theme.tables ?? []), { id: 't9' }];
+	state.objects['app:root'].extra.itemStyleIds = { s1: 't9' };
+	await saveState(ws, state);
+	await pushPlan({ config, slug: 'sales', deps, emitter: quiet, only: 'layouts', force: true });
+	const layout = layoutOf(calls, state.objects['page:dash'].id);
+	assert.ok(!layout.content.find((i) => i.contentKey === 1).style, 'the bar card does not take the table style');
+});

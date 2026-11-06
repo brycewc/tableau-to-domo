@@ -74,6 +74,18 @@ test('dry run makes no network calls, writes no state, and plans creates in orde
 	assert.equal(summary.actions[0].id, 'dry-run:dataset:orders');
 });
 
+test('a card left with no columns once failed beast modes are stripped is skipped, not sent', async () => {
+	const plan = samplePlan();
+	plan.cards[1].body.definition.subscriptions.main.columns = [{ formulaId: 'calculation_bad', mapping: 'VALUE' }];
+	const { config } = await setup(plan);
+	const { deps, calls } = stubDomo();
+	const summary = await pushPlan({ config, slug: 'sales', deps });
+	assert.equal(calls.filter((c) => c.name === 'createCard').length, 1);
+	const skipped = summary.actions.find((a) => a.key === 'sheet-2');
+	assert.equal(skipped.status, 'skipped');
+	assert.match(skipped.error, /main query has no columns/);
+});
+
 test('dry run without Domo settings still works', async () => {
 	const { config } = await setup();
 	config.domo = { instance: '', accessToken: '' };

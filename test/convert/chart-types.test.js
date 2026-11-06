@@ -192,13 +192,36 @@ test('a dual axis on one measure colored on one pane keeps the colored pane', ()
 	assert.equal(lines.chartType, 'badge_two_trendline');
 	assert.equal(lines.family, 'line');
 	assert.deepEqual(slots(lines), ['ITEM=[none:Quarter:nk]', 'SERIES=[none:Region:nk]', 'VALUE=[sum:Sales:qk]']);
-	assert.ok(lines.warnings.some((w) => w.code === 'chart.dual-axis' && /total bar \(Sales\) dropped/.test(w.message)));
+	assert.deepEqual(lines.overrides, { show_total_line: 'true' }, 'without known members the total bar is the total line');
+	assert.ok(lines.warnings.some((w) => w.code === 'chart.dual-axis' && /total bar \(Sales\) drawn as Domo's total line/.test(w.message)));
 	const bars = dual({}, { color: [REGION] }, {});
 	assert.equal(bars.chartType, 'badge_vert_stackedbar');
 	assert.ok(bars.warnings.some((w) => w.code === 'chart.dual-axis' && /total line \(Sales\) dropped/.test(w.message)));
 	assert.equal(dual({}, { color: [REGION] }, { color: [REGION] }).chartType, 'badge_line_bar', 'both panes colored keep the line+bar');
 	assert.equal(dual({ color: [REGION] }, {}, {}).chartType, 'badge_line_bar', 'a color on the shared pane colors both axes');
 	assert.equal(dual({}, { color: [REGION] }, { color: [CATEGORY] }).chartType, 'badge_line_bar', 'panes colored by different dimensions keep the line+bar');
+});
+
+test('a total bar with a line per member of a fixed color dimension is a bar + line with a series per member', () => {
+	const ws = sheet({
+		cols: p('none', 'Quarter'),
+		rows: `${SALES} + ${SALES}`,
+		panes: [
+			{ markClass: 'Bar', encodings: {} },
+			{ markClass: 'Bar', yAxisPill: SALES, encodings: {} },
+			{ markClass: 'Line', yAxisPill: SALES, encodings: { color: [REGION] } }
+		]
+	});
+	ws.color = { pillId: REGION, type: 'palette', members: [{ value: 'East' }, { value: 'West' }, { value: '%null%' }] };
+	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
+	assert.equal(r.chartType, 'badge_vert_bar_line');
+	assert.deepEqual(r.overrides, { set_line_count: '2' });
+	assert.deepEqual(r.mappings.map((m) => [m.mapping, m.derived?.member ?? m.pillId.replace(`[${DS}].`, '')]), [
+		['ITEM', '[none:Quarter:nk]'],
+		['SERIES', '[sum:Sales:qk]'],
+		['SERIES', 'East'],
+		['SERIES', 'West']
+	]);
 });
 
 test('pie and dual-axis donut', () => {

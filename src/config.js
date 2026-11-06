@@ -45,7 +45,8 @@ export function loadConfig({ env = null, cwd = process.cwd(), overrides = {} } =
 	const get = (key) => sourceOf(key)?.values[key] ?? '';
 	for (const [identity, secret] of [
 		['DOMO_INSTANCE', 'DOMO_ACCESS_TOKEN'],
-		['TABLEAU_SERVER', 'TABLEAU_PAT_SECRET']
+		['TABLEAU_SERVER', 'TABLEAU_PAT_SECRET'],
+		['SNOWFLAKE_ACCOUNT', 'SNOWFLAKE_PAT']
 	]) {
 		const idSource = sourceOf(identity);
 		const secretSource = sourceOf(secret);
@@ -70,6 +71,17 @@ export function loadConfig({ env = null, cwd = process.cwd(), overrides = {} } =
 			instance: get('DOMO_INSTANCE'),
 			accessToken: get('DOMO_ACCESS_TOKEN'),
 			...overrides.domo
+		},
+		snowflake: {
+			account: get('SNOWFLAKE_ACCOUNT'),
+			user: get('SNOWFLAKE_USER'),
+			role: get('SNOWFLAKE_ROLE') || undefined,
+			warehouse: get('SNOWFLAKE_WAREHOUSE') || undefined,
+			pat: get('SNOWFLAKE_PAT') || undefined,
+			privateKeyPath: get('SNOWFLAKE_PRIVATE_KEY_PATH') ? path.resolve(cwd, get('SNOWFLAKE_PRIVATE_KEY_PATH')) : undefined,
+			privateKeyPassphrase: get('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE') || undefined,
+			viewSchema: get('SNOWFLAKE_VIEW_SCHEMA'),
+			...overrides.snowflake
 		},
 		workspace: path.resolve(cwd, overrides.workspace || get('T2D_WORKSPACE') || 't2d-work'),
 		python: resolveInterpreter(overrides.python || get('T2D_PYTHON') || 'python3', cwd),

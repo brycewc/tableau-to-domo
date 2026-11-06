@@ -26,6 +26,7 @@ async function askUpFront({ ws, list, preExtract, config, client, sharedCache, r
 				metadata: rest.metadata,
 				publishedFields: rest.publishedFields,
 				domoLookup: rest.domoLookup,
+				snowflakeViews: rest.snowflakeViews,
 				selection: rest.selection,
 				unmapped: rest.unmapped,
 				decisionsOnly: true,
@@ -191,8 +192,17 @@ export async function migrateBatch(opts) {
 		emitter.step(`Listing workbooks${project ? ` in project "${project}"` : ' on the site'}`);
 		let list = await content.listWorkbooks(client, { project });
 		if (names?.length) {
-			const byLuid = new Set(names.map((n) => String(n).toLowerCase()));
-			const wanted = new Set(matchNames(names.filter((n) => !list.some((w) => w.id.toLowerCase() === String(n).toLowerCase())), list.map((w) => w.name), 'workbook'));
+			const ids = new Set(list.map((w) => w.id.toLowerCase()));
+			const isId = (n) => ids.has(String(n).trim().toLowerCase());
+			const byLuid = new Set();
+			const byName = [];
+			for (const n of names) {
+				const parts = String(n).split(',').map((p) => p.trim()).filter(Boolean);
+				if (isId(n)) byLuid.add(String(n).trim().toLowerCase());
+				else if (parts.length > 1 && parts.some(isId)) for (const p of parts) isId(p) ? byLuid.add(p.toLowerCase()) : byName.push(p);
+				else byName.push(n);
+			}
+			const wanted = new Set(byName.length ? matchNames(byName, list.map((w) => w.name), 'workbook') : []);
 			list = list.filter((w) => byLuid.has(w.id.toLowerCase()) || wanted.has(w.name));
 		}
 		list.sort((a, b) => String(a.project?.name ?? '').localeCompare(String(b.project?.name ?? '')) || a.name.localeCompare(b.name));

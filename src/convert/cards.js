@@ -625,6 +625,7 @@ class CardBuilder {
 	/** Add the column for one slot mapping. */
 	add(m) {
 		if (m.derived?.type === 'concat') return this.addCombinedItem(m);
+		if (m.derived?.type === 'member') return this.addMemberMeasure(m);
 		const { pill, binding } = this.resolve(m.pillId, { useBinSource: m.useBinSource });
 		if (!binding) return;
 		if (m.derived?.type === 'date-add') return this.addGanttEnd(m, pill, binding);
@@ -674,6 +675,27 @@ class CardBuilder {
 		this.pushGroup(ref);
 		this.combinedFormulas.add(id);
 		META.set(column, { raw: false, aggregated: false });
+	}
+
+	addMemberMeasure(m) {
+		const series = this.resolve(m.derived.seriesPillId);
+		const measure = this.resolve(m.derived.measurePillId);
+		const seriesExpr = series.binding && !series.binding.aggregated ? bindingExpression(series.binding) : undefined;
+		const built = measure.binding && this.measureRef({ ...m, pillId: m.derived.measurePillId, derived: undefined }, measure.pill, measure.binding);
+		const column = built?.ref?.column;
+		if (!seriesExpr || !built?.aggregation || !column || column.startsWith('calculation_')) {
+			this.warn('chart.dual-axis', `The ${m.derived.member} line could not be built from ${this.fieldName(measure.pill, measure.binding)}; left off the card`);
+			return;
+		}
+		const formula = `${built.aggregation}(CASE WHEN ${seriesExpr} = ${sqlLiteral(m.derived.member)} THEN \`${column}\` END)`;
+		const id = this.addFormula({ name: `${m.derived.member} ${this.fieldName(measure.pill, measure.binding)}`, formula, dataType: 'numeric', aggregated: true });
+		const out = { column: id, formulaId: id, mapping: m.mapping, alias: m.derived.member };
+		const format = this.columnFormat(measure.pill, measure.binding, built.ref, true);
+		if (format) out.format = format;
+		this.columns.push(out);
+		this.slots.push({ pillId: m.pillId, role: m.role, column: out });
+		this.aggregatedFormulas.add(id);
+		META.set(out, { raw: false, aggregated: true });
 	}
 
 	addGanttEnd(m, pill, binding) {
@@ -1654,6 +1676,8 @@ export function planCard(ws, ir, bindings, { key, datasetKey, filterZones = new 
 	const negatives = negativeNumberOverrides(ws, { chartType, styles: [...builder.negativeStyles.values()] });
 	builder.issues.push(...negatives.issues);
 	Object.assign(overrides, negatives.overrides);
+	if (chartType === 'badge_basic_table' && measureNamesAsRows(ws)) overrides.transposed = 'true';
+	Object.assign(overrides, inference.overrides);
 	const formulas = inference.family === 'crosstab' ? usedFormulas(builder.formulas, subscription, controls) : builder.formulas;
 	const colors = cardColorRules(ws, { family: TABLE_CHARTS.has(chartType) ? 'table' : inference.family, slots: builder.slots, dataSourceId: ref('dataset', datasetKey) });
 	const split = inference.split ? splitSpec(builder, ws, inference.split.pillId) : undefined;
@@ -1746,3 +1770,11 @@ export function planCards(ir, bindings, { workbookKey, options = {}, scopes, var
 
 export { MEASURE_SLOTS };
 export { titleText } from './titles.js';
+
+const shelfPills = (node) => (!node ? [] : node.op === 'pill' ? [node.pillId] : (node.children ?? []).flatMap(shelfPills));
+
+function measureNamesAsRows(ws) {
+	const rows = shelfPills(ws.rows);
+	const cols = shelfPills(ws.cols);
+	return rows.some((id) => id.endsWith('[:Measure Names]')) && cols.length > 0 && !cols.some((id) => id.endsWith('[:Measure Names]'));
+}

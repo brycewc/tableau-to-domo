@@ -585,6 +585,49 @@ its text and the reason, and the data decision offers an export instead (Enter a
 case-sensitively, unlike SQL Server's default collation, so `LIKE` becomes `ILIKE` and the report warns about text
 joins (`data.initial-sql-note`). The report's `data.initial-sql` line lists every statement and what became of it.
 
+### Snowflake views for Initial SQL (`--snowflake-views`)
+
+Cloud Amplifier reads tables, so a Snowflake connection whose Initial SQL builds temp tables that its Custom SQL reads
+would otherwise fall back to a snapshot. A temp table lives only in the session that made it, so the logic has to
+become a real object. With `--snowflake-views`, extract turns it into views in `SNOWFLAKE_VIEW_SCHEMA`:
+
+- each `CREATE TEMP TABLE t AS SELECT ...` becomes a view `T2D_<T>_<hash>`, its table names qualified from the
+  connection's database and schema and the `USE` statements, and later temp tables reading the earlier views;
+- a table created with columns and filled by `INSERT ... VALUES` or `INSERT ... SELECT` becomes one view over its rows;
+- each Custom SQL query becomes a view `T2D_<DATASOURCE>_<QUERY>` over those, and a table relation naming a temp
+  table reads its view;
+- `ALTER SESSION`, `USE`, `DROP` and a bare `SELECT` are skipped.
+
+The datasource then reads the views like any warehouse table, so Cloud Amplifier registers them and the cards query
+them live. A temp table defined the same way in several datasources is one view, since the name carries a hash of its
+SQL. Statements that change data in steps (`UPDATE`, `DELETE`, variables, loops) cannot become views; those
+datasources keep the connector Magic ETL path or a snapshot (`data.snowflake-views-unsupported`).
+
+The DDL is always written to `<workspace>/snowflake/<datasource>.sql`. t2d runs it through the Snowflake SQL API
+when the `SNOWFLAKE_*` settings are complete, and otherwise warns `data.snowflake-views-ddl` so someone can review
+and run it, then extract again. It creates views only in `SNOWFLAKE_VIEW_SCHEMA`, marks each with a
+`Created by t2d` comment, and never replaces a view of the same name that lacks it (`data.snowflake-view-exists`).
+
+Setup, once per Snowflake account:
+
+```sql
+CREATE ROLE T2D_MIGRATION;
+GRANT USAGE ON WAREHOUSE <wh> TO ROLE T2D_MIGRATION;
+GRANT USAGE ON DATABASE <db> TO ROLE T2D_MIGRATION;           -- and every source database
+GRANT USAGE ON SCHEMA <db>.<schema> TO ROLE T2D_MIGRATION;     -- and SELECT on the source tables
+GRANT CREATE VIEW, USAGE ON SCHEMA <db>.TABLEAU_MIGRATION TO ROLE T2D_MIGRATION;
+CREATE USER T2D_SVC TYPE = SERVICE DEFAULT_ROLE = T2D_MIGRATION;   -- then a PAT or RSA_PUBLIC_KEY
+GRANT ROLE T2D_MIGRATION TO USER T2D_SVC;
+-- Cloud Amplifier's role must read the views:
+GRANT USAGE ON SCHEMA <db>.TABLEAU_MIGRATION TO ROLE <domo role>;
+GRANT SELECT ON FUTURE VIEWS IN SCHEMA <db>.TABLEAU_MIGRATION TO ROLE <domo role>;
+```
+
+`.env`: `SNOWFLAKE_ACCOUNT` (e.g. `gib51418.us-east-1`), `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`, `SNOWFLAKE_WAREHOUSE`,
+`SNOWFLAKE_VIEW_SCHEMA` (`DATABASE.SCHEMA`), and `SNOWFLAKE_PAT` (a programmatic access token; Snowflake requires a
+network policy on the user) or `SNOWFLAKE_PRIVATE_KEY_PATH` (key-pair auth, with `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`
+for an encrypted key).
+
 ### Federated (zero copy, opt-in)
 
 A Domo federated DataSet points at one table on a federated account and Domo queries the database live for every

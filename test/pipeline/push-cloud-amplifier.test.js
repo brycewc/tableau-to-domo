@@ -124,6 +124,25 @@ test('a dataflow on a new SQL view waits until the view is readable, and runs ag
 	assert.ok(later.indexOf('waitForReadable') < later.indexOf('runDataflow'));
 });
 
+test('a view rejected for UNION branch types is sent again with the column cast in every branch', async () => {
+	const plan = caPlan();
+	const view = plan.datasets.find((d) => d.key === 'view');
+	view.view.schema.tables[0].columns = [{ name: 'FQ', id: 'FQ', type: 'DOUBLE', visible: true, order: 0 }];
+	view.view.schema.viewTemplate.selectString = 'SELECT FQ FROM `t1` UNION ALL SELECT 1.5 AS FQ FROM `t1`';
+	const { config } = await setup(plan);
+	const { deps, calls } = caStubs();
+	const sent = [];
+	deps.views.createSqlView = async (_c, body) => {
+		sent.push(body.schema.viewTemplate.selectString);
+		if (sent.length === 1) throw new Error('HTTP 400: {"message":"Invalid view definition column types do not match. FQ(FQ):LONG does not match FQ(FQ):DECIMAL"}');
+		calls.push({ name: 'createSqlView' });
+		return { dataSourceId: 'view-1' };
+	};
+	const summary = await pushPlan({ config, slug: 'sales', deps, plan });
+	assert.equal(summary.ok, true, JSON.stringify(summary.actions.filter((a) => a.status === 'failed')));
+	assert.equal(sent[1], 'SELECT TRY_CAST(CAST(FQ AS VARCHAR) AS DOUBLE) AS FQ FROM `t1` UNION ALL SELECT TRY_CAST(CAST(1.5 AS VARCHAR) AS DOUBLE) AS FQ FROM `t1`');
+});
+
 function uploadPlan() {
 	const plan = samplePlan();
 	plan.datasets[0].upload = undefined;

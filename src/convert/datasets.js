@@ -6,7 +6,7 @@ import { planConnector, relationParts, isConnectorClass } from './connectors.js'
 import { buildJoinDataflow, buildFusionView, magicJoinType, originKey, refreshesOnUpdate } from './etl.js';
 import { planDatasourceInitialSql, describeInitialSql, initialSqlBlockedMessage } from './initial-sql.js';
 import { buildInitialSqlDataflow } from './initial-sql-etl.js';
-import { rewriteCollate } from './view-sql.js';
+import { UNION_CAST_TYPES, aliasDerivedTables, anchorConstantUnionColumns, expandStarsOverUnions, aliasUnionBranches, castUnionNulls, inlineCtes, matchColumnCaseFully, rewriteToVarchar, projectionNames, rewriteCollate, rewriteDateAdd, rewriteDateDiff, rewriteUnpivot, stripComments } from './view-sql.js';
 
 /**
  * @typedef {import('../model/types.js').WorkbookIR} WorkbookIR
@@ -248,6 +248,10 @@ function treeFromRelation(relation, ds, inputs, issues) {
 	const leftTables = [...subtreeTables(left)];
 	const rightTables = [...subtreeTables(right)];
 	const keys = [];
+	const constant = (side) => /^(?:-?\d+(?:\.\d+)?|'[^']*'|"[^"]*"|TRUE)$/i.test(String(side ?? '').trim());
+	if ((relation.on ?? []).length && relation.on.every((c) => constant(c.left) && constant(c.right) && String(c.left).trim() === String(c.right).trim())) {
+		return { type: 'join', joinType: 'CROSS', left, right, keys };
+	}
 	for (const cond of relation.on ?? []) {
 		if (cond.op && cond.op !== '=' && cond.op !== '==') {
 			issues.push({
@@ -302,11 +306,17 @@ function treeFromRelationships(ds, inputs, issues) {
 		degree.set(e.to.id, (degree.get(e.to.id) ?? 0) + 1);
 	}
 	const order = [...inputs.keys()];
-	const fact = order.reduce((best, id) => ((degree.get(id) ?? 0) > (degree.get(best) ?? 0) ? id : best), order[0]);
+	// The physical join tree is the logical table its relationships attach to; it must stay one unit.
+	const rel = ds.relationTree;
+	const physical = rel && (rel.type === 'join' || rel.type === 'union') ? treeFromRelation(rel, ds, inputs, issues) : undefined;
+	const group = physical ? subtreeTables(physical) : new Set();
+	const anchored = physical && edges.some((e) => group.has(e.from.id) || group.has(e.to.id));
+	const fact = anchored ? [...group][0] : order.reduce((best, id) => ((degree.get(id) ?? 0) > (degree.get(best) ?? 0) ? id : best), order[0]);
 
-	const visited = new Set([fact]);
+	const visited = anchored ? new Set(group) : new Set([fact]);
 	const remaining = [...edges];
-	let tree = { type: 'input', tableId: fact };
+	let tree = anchored ? physical : { type: 'input', tableId: fact };
+	const sideTables = (input) => (group.has(input.id) ? [...group] : [input.id]);
 	let progress = true;
 	while (remaining.length && progress) {
 		progress = false;
@@ -330,8 +340,8 @@ function treeFromRelationships(ds, inputs, issues) {
 			const visitedIds = [...visited];
 			const keys = [];
 			for (const cond of e.on ?? []) {
-				let l = resolveKeySide(cond.left, ds, inputs, [e.from.id], issues);
-				let r = resolveKeySide(cond.right, ds, inputs, [e.to.id], issues);
+				let l = resolveKeySide(cond.left, ds, inputs, sideTables(e.from), issues);
+				let r = resolveKeySide(cond.right, ds, inputs, sideTables(e.to), issues);
 				if (!fromIn) [l, r] = [r, l];
 				if (l && r && l.tableId === added.id && visitedIds.includes(r.tableId)) [l, r] = [r, l];
 				if (!l || !r || !visitedIds.includes(l.tableId) || r.tableId !== added.id) {
@@ -614,11 +624,12 @@ export function planDatasets(ir, manifests, { mappings = {}, options = {}, workb
 			if (!planned) continue;
 			inputs.push(...planned);
 		} else if (manifest.strategy === 'cloud-amplifier') {
-			const planned = planCloudAmplifierInputs(ds, manifest, { name, description, tableKey, issues });
+			const planned = planCloudAmplifierInputs(ds, manifest, { name, description, dsKey, tableKey, issues });
 			if (!planned) continue;
 			effective = planned.effective;
 			inputs.push(...planned.inputs);
 			datasets.push(...planned.early);
+			dataflows.push(...planned.flows);
 		} else if (UPLOAD_STRATEGIES.has(manifest.strategy)) {
 			const all = manifest.tables ?? [];
 			const flat = all.find((t) => t.flattened);
@@ -834,8 +845,67 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 	for (const r of [...refs].sort((a, b) => b.start - a.start)) {
 		selectString = `${selectString.slice(0, r.start)}\`t${r.table + 1}\`${selectString.slice(r.end)}`;
 	}
-	const collate = rewriteCollate(selectString.trim().replace(/;+\s*$/, ''));
-	selectString = collate.sql;
+	const ctes = inlineCtes(stripComments(selectString).trim().replace(/;+\s*$/, ''));
+	const unpivot = rewriteUnpivot(aliasDerivedTables(rewriteToVarchar(ctes.sql).sql).sql);
+	const collate = rewriteCollate(unpivot.sql);
+	const dateAdd = rewriteDateAdd(collate.sql);
+	const dateDiff = rewriteDateDiff(dateAdd.sql);
+	const unions = aliasUnionBranches(dateDiff.sql);
+	const nulls = castUnionNulls(unions.sql, new Map(columns.map((c) => [String(c.name).toLowerCase(), UNION_CAST_TYPES[c.type]])));
+	const anchored = anchorConstantUnionColumns(nulls.sql);
+	const starred = expandStarsOverUnions(matchColumnCaseFully(anchored.sql).sql);
+	const cased = matchColumnCaseFully(starred.sql);
+	selectString = cased.sql;
+	if (cased.fixed.length && issues) {
+		issues.push({
+			severity: 'info',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}': column references written in a different case from their derived table were matched to it (${cased.fixed.join(', ')}), since the SQL DataSet View resolves names as written.`,
+			object
+		});
+	}
+	if ((dateDiff.rewrites || unions.aliased || nulls.cast || anchored.anchored || starred.expanded) && issues) {
+		issues.push({
+			severity: 'info',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}': ${[dateDiff.rewrites ? `${dateDiff.rewrites} DATEDIFF(<part>, a, b) call(s) rewritten as DATEDIFF(b, a) or date-part arithmetic` : '', unions.aliased ? `${unions.aliased} UNION branch column(s) aliased to the first branch's names` : '', nulls.cast ? `${nulls.cast} NULL UNION branch item(s) cast to their column's type` : '', anchored.anchored ? `${anchored.anchored} UNION column(s) that are constant in every branch tied to a table column` : '', starred.expanded ? `${starred.expanded} SELECT * over a UNION written out as its column list` : ''].filter(Boolean).join(', and ')}, since the SQL DataSet View parser rejects the original form.`,
+			object
+		});
+	}
+	if (dateDiff.skipped.length && issues) {
+		issues.push({
+			severity: 'warning',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}': ${dateDiff.skipped.length} DATEDIFF() call(s) use a date part with no Domo equivalent and stay as they are, so the view will fail: ${dateDiff.skipped.slice(0, 3).join('; ')}`,
+			object
+		});
+	}
+	if ((ctes.inlined.length || unpivot.rewrites) && issues) {
+		issues.push({
+			severity: 'info',
+			code: 'data.view-sql-rewrite',
+			message: `Custom SQL of '${name}': ${[ctes.inlined.length ? `CTE(s) ${ctes.inlined.join(', ')} inlined as derived tables` : '', unpivot.rewrites ? `${unpivot.rewrites} UNPIVOT(s) rewritten as a CROSS JOIN with a CASE` : ''].filter(Boolean).join(', and ')}, since the SQL DataSet View parser rejects them.`,
+			object
+		});
+	}
+	const projected = new Map((projectionNames(selectString) ?? []).filter(Boolean).map((n) => [n.toLowerCase(), n]));
+	const outputName = (c) => projected.get(String(c.name).toLowerCase()) ?? c.name;
+	if (dateAdd.rewrites && issues) {
+		issues.push({
+			severity: 'info',
+			code: 'data.view-sql-dateadd',
+			message: `Custom SQL of '${name}': ${dateAdd.rewrites} DATEADD() call(s) rewritten as DATE_ADD(<date>, INTERVAL <n> <part>), since the SQL DataSet View parser rejects DATEADD.`,
+			object
+		});
+	}
+	if (dateAdd.skipped.length && issues) {
+		issues.push({
+			severity: 'warning',
+			code: 'data.view-sql-dateadd',
+			message: `Custom SQL of '${name}': ${dateAdd.skipped.length} DATEADD() call(s) use a date part with no Domo interval and stay as they are, so the view will fail: ${dateAdd.skipped.slice(0, 3).join('; ')}`,
+			object
+		});
+	}
 	if (collate.rewrites.length && issues) {
 		const loose = collate.rewrites.filter((r) => !r.compared && /ci/i.test(r.spec)).length;
 		issues.push({
@@ -854,7 +924,7 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 		...(cloudId ? { cloudId } : {}),
 		trigger: { dataSource: ref('dataset', aliasKeys[used[0]]) },
 		schema: {
-			tables: [{ columns: columns.map((c, order) => ({ name: c.name, id: c.name, type: c.type, visible: true, order })) }],
+			tables: [{ columns: columns.map((c, order) => ({ name: outputName(c), id: outputName(c), type: c.type, visible: true, order })) }],
 			viewTemplate: { version: 'advancedEditorSql', fromItemInfo: SQL_VIEW_FROM_INFO, selectString },
 			tableAliases
 		}
@@ -905,10 +975,10 @@ function planFederatedInputs(ds, manifest, { name, description, issues }) {
 	});
 }
 
-function planCloudAmplifierInputs(ds, manifest, { name, description, tableKey, issues }) {
+function planCloudAmplifierInputs(ds, manifest, { name, description, dsKey, tableKey, issues }) {
 	const ca = manifest.cloudAmplifier;
 	const object = dsObject(ds);
-	if (!ca?.tables?.length || !ca.relations?.length) {
+	if (!ca?.tables?.length || !(ca.relations?.length || ca.initialSqlDataflows?.length)) {
 		issues.push({ severity: 'error', code: 'data.no-tables', message: `The Cloud Amplifier manifest of '${ds.caption}' lists no tables.`, object });
 		return null;
 	}
@@ -969,26 +1039,104 @@ function planCloudAmplifierInputs(ds, manifest, { name, description, tableKey, i
 		});
 		const viewName = ca.relations.length > 1 ? `${name} - ${rel.name}` : name;
 		const aliasKeys = registrations.map((d) => d.key);
+		const view = buildSqlView({ name: viewName, description, sql: rel.sql, refs: rel.refs, aliasKeys, columns, dataProviderType: first.dataProviderKey, cloudId: first.integrationId, issues, object });
+		const viewNames = view.schema.tables[0].columns.map((c) => c.name);
 		inputs.push({
 			id: rel.tableId,
 			name: rel.name,
 			table,
-			columns: columns.map((c) => ({ name: c.name, type: c.type, sourceName: c.name })),
+			columns: columns.map((c, i) => ({ name: viewNames[i], type: c.type, sourceName: c.name })),
 			datasetKey: '',
 			dataset: {
 				key: '',
 				name: viewName,
 				description,
 				strategy: 'view',
-				schema: columns.map((c) => ({ name: c.name, type: c.type })),
-				view: buildSqlView({ name: viewName, description, sql: rel.sql, refs: rel.refs, aliasKeys, columns, dataProviderType: first.dataProviderKey, cloudId: first.integrationId, issues, object }),
+				schema: columns.map((c, i) => ({ name: viewNames[i], type: c.type })),
+				view,
 				datasourceId: ds.id,
 				cardTarget: false,
 				fieldMap: {}
 			}
 		});
 	}
-	return { effective, inputs, early };
+	const flows = [];
+	const stagesOf = (scripted) => scripted.stages ?? [{ definition: scripted.definition, outputs: scripted.outputs }];
+	const finalOutputs = (scripted) => stagesOf(scripted).flatMap((stage) => stage.outputs.filter((o) => !o.intermediate));
+	const onlyOutput = !ca.relations.length && (ca.initialSqlDataflows ?? []).flatMap(finalOutputs).length === 1;
+	for (const scripted of ca.initialSqlDataflows ?? []) {
+		const registered = (index) => {
+			const dataset = registrations[index];
+			if (!dataset.key) {
+				dataset.key = tableKey(ca.tables[index].tableName);
+				early.push(dataset);
+			}
+			return ref('dataset', dataset.key);
+		};
+		const stageKeys = new Map();
+		const resolveInputs = (node) => {
+			if (Array.isArray(node)) return node.map(resolveInputs);
+			if (!node || typeof node !== 'object') return node;
+			return Object.fromEntries(
+				Object.entries(node).map(([k, v]) => {
+					if (k !== 'dataSourceId') return [k, resolveInputs(v)];
+					const text = String(v);
+					if (/^ca:\d+$/.test(text)) return [k, registered(Number(text.slice(3)))];
+					if (text.startsWith('stage:')) {
+						const key = stageKeys.get(text.slice(6));
+						if (!key) throw new Error(`Initial SQL dataflow stage input '${text.slice(6)}' is not an earlier stage's output`);
+						return [k, ref('dataset', key)];
+					}
+					return [k, v];
+				})
+			);
+		};
+		const stages = stagesOf(scripted);
+		let firstName;
+		for (const [n, stage] of stages.entries()) {
+			const definition = resolveInputs(stage.definition);
+			firstName ??= definition.name;
+			const dataflowKey = tableKey(stages.length > 1 ? `initial-sql-${n + 1}` : 'initial-sql');
+			const outputKeys = [];
+			for (const output of stage.outputs) {
+				const columns = (output.columns ?? []).map((c) => ({ name: c.name, type: c.type ?? 'STRING' }));
+				if (!output.columns) {
+					issues.push({ severity: 'warning', code: 'data.initial-sql-magic-columns', message: `Output '${output.name}' of the Initial SQL dataflow of '${ds.caption}' has no known columns, so its fields are matched after the first run.`, object });
+				}
+				const key = !output.intermediate && onlyOutput ? dsKey : tableKey(output.name);
+				outputKeys.push(key);
+				const dataset = {
+					key,
+					name: output.name,
+					description,
+					strategy: 'dataflow-output',
+					sourceStrategy: 'cloud-amplifier',
+					schema: columns,
+					dataflowOutput: { dataflowKey, outputName: output.name },
+					datasourceId: ds.id,
+					cardTarget: false,
+					fieldMap: {}
+				};
+				if (output.intermediate) {
+					stageKeys.set(output.name, key);
+					early.push(dataset);
+					continue;
+				}
+				const table = findTable(effective, output.tableId) ?? (effective.tables ?? []).find((t) => t.id === output.tableId);
+				inputs.push({ id: output.tableId, name: table?.name || output.name, table, columns: columns.map((c) => ({ ...c, sourceName: c.name })), datasetKey: key, dataset });
+			}
+			flows.push({ key: dataflowKey, name: definition.name, definition, outputDatasetKeys: outputKeys, runAfterCreate: true });
+		}
+		issues.push(...(scripted.issues ?? []).map((i) => ({ ...i, object: i.object ?? object })));
+		issues.push({
+			severity: 'warning',
+			code: 'data.initial-sql-magic-refresh',
+			message: `The Initial SQL of '${ds.caption}' runs as ${stages.length > 1 ? `${stages.length} chained Magic ETL dataflows ('${firstName}' first)` : `Magic ETL dataflow '${firstName}'`} on the warehouse. Its Cloud Amplifier inputs do not trigger it, so it only reruns on a schedule.`,
+			object,
+			suggestion: stages.length > 1 ? 'Schedule the first dataflow in Domo after push, and set each later one to run when the previous one updates its output.' : 'Set a schedule on the dataflow in Domo after push (Settings > Schedule).'
+		});
+	}
+	return { effective, inputs, early, flows };
 }
 
 function schemaOnlyDataset(ds, { key, name, description, mappings }) {

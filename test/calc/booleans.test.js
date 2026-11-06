@@ -74,9 +74,9 @@ test('with variables, boolean parameters and nested boolean IFs become predicate
 		'an aliased parameter maps its label back to the value'
 	);
 	const filter = bms.RelativeStartDateFilter.expression;
-	assert.ok(filter.startsWith("CASE WHEN `RelativeStartDate` = 'All' THEN 'true' WHEN `RelativeStartDate` = 'Today' THEN CASE WHEN `Days Since Start` = 0 THEN 'true' WHEN NOT (`Days Since Start` = 0) THEN 'false' END"));
+	assert.ok(filter.startsWith("CASE WHEN `RelativeStartDate` = 'All' THEN 'true' WHEN `RelativeStartDate` = 'Today' THEN CASE WHEN `Days Since Start` = 0 THEN 'true' WHEN `Days Since Start` != 0 THEN 'false' END"));
 	assert.ok(filter.includes("AND (CASE WHEN `Currentfp` = 1 THEN CASE WHEN (`Fiscal Period Num` = 12 AND `Fiscal Year Num` = `Currentfy` - 1) THEN 'true'"));
-	assert.ok(filter.includes("ELSE CASE WHEN `Fiscal Period Num` = `Currentfp` - 1 THEN 'true' WHEN NOT (`Fiscal Period Num` = `Currentfp` - 1) THEN 'false' END END = 'true')) THEN 'true'"));
+	assert.ok(filter.includes("ELSE CASE WHEN `Fiscal Period Num` = `Currentfp` - 1 THEN 'true' WHEN `Fiscal Period Num` != `Currentfp` - 1 THEN 'false' END END = 'true')) THEN 'true'"));
 });
 
 const BOOL_CALCS = {
@@ -109,7 +109,7 @@ const SHAPES = [
 	["CASE 'b' WHEN 'a' THEN 1 WHEN 'b' THEN 2 END", '2'],
 	["CASE 'z' WHEN 'a' THEN 1 END", 'NULLIF(1, 1)'],
 	['IF [Sales] > 0 THEN 1 ELSE NULL END', 'CASE WHEN `Sales` > 0 THEN 1 END'],
-	["[Region] = 'East' AND TRUE", "CASE WHEN `Region` = 'East' THEN 'true' WHEN NOT (`Region` = 'East') THEN 'false' END"],
+	["[Region] = 'East' AND TRUE", "CASE WHEN `Region` = 'East' THEN 'true' WHEN `Region` != 'East' THEN 'false' END"],
 	["[Region] = 'East' OR TRUE", "'true'"],
 	["FALSE AND [Region] = 'East'", "'false'"],
 	["'a' IN ('a', 'b')", "'true'"],
@@ -126,7 +126,7 @@ const SHAPES = [
 	['[Sales] * [Dir]', '`Sales` * 1'],
 	[
 		'IF [Sales] > 0 THEN [Profit] = 0 ELSE [Profit] > 0 END',
-		"CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` = 0 THEN 'true' WHEN NOT (`Profit` = 0) THEN 'false' END ELSE CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END END"
+		"CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` = 0 THEN 'true' WHEN `Profit` != 0 THEN 'false' END ELSE CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END END"
 	],
 	[
 		"[Region] = 'East' AND (IF [Sales] > 0 THEN [Profit] > 0 ELSE [Discount] > 0 END)",
@@ -160,7 +160,7 @@ test('a dead branch is not translated, so its problems are not reported', () => 
 });
 
 const BIG = "CASE WHEN (`Sales` > 1000) THEN 'true' WHEN `Sales` <= 1000 THEN 'false' END";
-const EAST = "CASE WHEN (`Region` = 'East') THEN 'true' WHEN NOT (`Region` = 'East') THEN 'false' END";
+const EAST = "CASE WHEN (`Region` = 'East') THEN 'true' WHEN `Region` != 'East' THEN 'false' END";
 
 /** Comparisons at the top level of each aggregate, window or CAST argument; nested calls and CASE blocks are skipped. */
 function comparisonsInsideCalls(sql) {

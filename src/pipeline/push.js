@@ -10,6 +10,8 @@ import { collectRefs, isRef, resolveRefs } from '../util/refs.js';
 import { KIND_GROUP, hasObjectSelection, keyMatcher, mentions, normalizeSelection, planColumns, selectPlan } from '../convert/select.js';
 import { bindVariables, variableControl, variableExpression } from '../convert/variables.js';
 import { finishLayout } from '../convert/layout.js';
+import { isTableChart } from '../convert/drill.js';
+import { UNION_CAST_TYPES, castUnionColumn } from '../convert/view-sql.js';
 import { linkedPageKeys, tableauViewLink } from '../convert/app-layout.js';
 import { paletteJson } from '../convert/colors.js';
 import { expandSplitCard } from '../convert/split.js';
@@ -24,6 +26,7 @@ import { calendarNeeds, checkFiscalCalendars, otherWorkbookNeeds, workspaceCalen
 import { latestRunLogs, writeRunLog } from './runs.js';
 import { acquireStateLock, deleteEntry, getEntry, loadState, saveState, setEntry } from './state.js';
 import { openWorkspace } from './workspace.js';
+
 
 export const PUSH_KINDS = ['datasets', 'dataflows', 'variables', 'beastmodes', 'app', 'pages', 'cards', 'layouts', 'navigation'];
 
@@ -223,7 +226,7 @@ export function stripFormulaRefs(value, legacyIds) {
 }
 
 function withBigNumber(body, bigNumber) {
-	if (!bigNumber) return body;
+	if (!bigNumber?.columns?.length) return body;
 	const definition = body.definition ?? {};
 	return {
 		...body,
@@ -931,6 +934,24 @@ async function pushPlanUnlocked({
 		await record({ ...base, action: 'create', id, status: 'ok', notes });
 	}
 
+	async function withUnionCasts(body, send) {
+		let current = body;
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await send(current);
+			} catch (err) {
+				const column = String(err?.message ?? '').match(/column types do not match\. .*?\(([^()]+)\):\w+ does not match/)?.[1];
+				const declared = column && current.schema.tables.flatMap((t) => t.columns ?? []).find((col) => col.name === column);
+				const sqlType = declared && UNION_CAST_TYPES[declared.type];
+				if (!sqlType || attempt >= 40) throw err;
+				const cast = castUnionColumn(current.schema.viewTemplate.selectString, column, sqlType);
+				if (!cast.cast) throw err;
+				emitter.progress(`View column ${column} differs in type between UNION branches; casting it to ${sqlType}`);
+				current = { ...current, schema: { ...current.schema, viewTemplate: { ...current.schema.viewTemplate, selectString: cast.sql } } };
+			}
+		}
+	}
+
 	async function pushViewDataset(ds, ref, entry, base) {
 		if (!ds.view) throw new Error('strategy "view" without view body');
 		const body = resolve(ds.view);
@@ -944,10 +965,10 @@ async function pushPlanUnlocked({
 		}
 		let id = entry?.id;
 		if (!entry) {
-			id = idOf(sqlView ? await d.views.createSqlView(c, body) : await d.views.createFusion(c, body), 'dataSourceId', 'id');
+			id = idOf(sqlView ? await withUnionCasts(body, (b) => d.views.createSqlView(c, b)) : await d.views.createFusion(c, body), 'dataSourceId', 'id');
 			if (!id) throw new Error(`${sqlView ? 'createSqlView' : 'createFusion'} returned no dataSourceId`);
 		} else if (isChanged) {
-			if (sqlView) await d.views.updateSqlView(c, id, body);
+			if (sqlView) await withUnionCasts(body, (b) => d.views.updateSqlView(c, id, b));
 			else await d.views.updateFusion(c, id, body);
 		}
 		setEntry(state, ref, { id, hash, extra: { strategy: 'view', ...(sqlView ? { sql: true } : {}) } });
@@ -1678,6 +1699,11 @@ async function pushPlanUnlocked({
 				const [body, removed] = dropped.size ? stripFormulaRefs(card.body, dropped) : [card.body, 0];
 				if (removed) {
 					const names = [...dropped].filter((id) => JSON.stringify(card.body).includes(id)).map((id) => droppedFormulas.get(id)?.name ?? id);
+					const emptied = Object.entries(body.definition?.subscriptions ?? {}).filter(([, s]) => !(s?.columns ?? []).length);
+					if (emptied.length) {
+						await record({ ...base, action: 'skip', id: entry?.id ?? null, status: 'skipped', error: `Not created: without beast mode(s) ${names.join(', ')}, its ${emptied.map(([k]) => k).join(', ')} query has no columns` });
+						continue;
+					}
 					notes.push(`pushed without beast mode(s): ${names.join(', ')}`);
 					summary.issues.push({
 						severity: 'warning',
@@ -2328,6 +2354,8 @@ async function pushPlanUnlocked({
 		// An item style id is used only when t2d wrote it into the theme and the app's theme still has it (else a 400).
 		const itemStyleIds = asApp ? (getEntry(state, appRef)?.extra?.itemStyleIds ?? {}) : {};
 		const themeStyleIds = appCurrent?.theme ? new Set([...(appCurrent.theme.cards ?? []), ...(appCurrent.theme.tables ?? [])].map((s) => s.id)) : undefined;
+		const tableStyleIds = appCurrent?.theme ? new Set((appCurrent.theme.tables ?? []).map((s) => s.id)) : undefined;
+		const cardsByKey = new Map((plan.cards ?? []).map((c) => [c.key, c]));
 		let unstyled = 0;
 		const fillIds = asApp ? sectionFillIds(appCurrent?.theme, sectionFills) : {};
 		let unfilled = 0;
@@ -2350,7 +2378,12 @@ async function pushPlanUnlocked({
 			if (!('itemStyle' in item)) return item;
 			const { itemStyle, ...rest } = item;
 			const id = itemStyleIds[itemStyle];
-			if (id && (!themeStyleIds || themeStyleIds.has(id))) rest.style = { ...(rest.style ?? {}), sourceId: id };
+			// Domo takes a table style only on a table card and a card style only on any other item.
+			const cardKey = isRef(item.cardId) ? String(item.cardId.$ref).replace(/^card:/, '') : undefined;
+			const chartType = cardKey ? cardsByKey.get(cardKey)?.chartType : undefined;
+			const tableStyle = tableStyleIds ? tableStyleIds.has(id) : /^t\d+$/.test(String(id));
+			const fits = !id || tableStyle === (item.type === 'CARD' && isTableChart(chartType));
+			if (id && fits && (!themeStyleIds || themeStyleIds.has(id))) rest.style = { ...(rest.style ?? {}), sourceId: id };
 			else unstyled += 1;
 			return rest;
 		};

@@ -51,7 +51,7 @@ test('a FIXED LOD used as a dimension becomes a Group By joined back in a new da
 	const r = run([calc('First Order', '{FIXED [Customer] : MIN([Order Date])}', 'date', 'dimension'), calc('Is First', '[Order Date] = [First Order]', 'boolean', 'dimension')]);
 	assert.equal(bm(r, 'First Order'), undefined);
 	assert.equal(bm(r, 'Is First').status, 'ok');
-	assert.equal(bm(r, 'Is First').expression, "CASE WHEN `Order Date` = `First Order` THEN 'true' WHEN NOT (`Order Date` = `First Order`) THEN 'false' END");
+	assert.equal(bm(r, 'Is First').expression, "CASE WHEN `Order Date` = `First Order` THEN 'true' WHEN `Order Date` != `First Order` THEN 'false' END");
 
 	const source = r.datasets.find((d) => d.key === 'wb.superstore');
 	const output = r.datasets.find((d) => d.key === 'wb.superstore.etl');

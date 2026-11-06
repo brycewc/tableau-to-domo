@@ -9,7 +9,9 @@ import { exportPublishedDatasource } from './vds.js';
 import { exportViewCsv } from './view-csv.js';
 import { reformatCsv } from './csv-writer.js';
 import { matchCloudAmplifier, mappingSnippet, planTargets } from './cloud-amplifier.js';
-import { planDatasourceInitialSql, initialSqlBlockedMessage } from '../../convert/initial-sql.js';
+import { inlineInitialSql } from './initial-sql-inline.js';
+import { planInitialSqlDataflow } from '../../magic/datasource.js';
+import { INITIAL_SQL_KEYS, planDatasourceInitialSql, initialSqlBlockedMessage, oneLine } from '../../convert/initial-sql.js';
 import { cacheTtlOf, federatedConnection, findFederatedMapping, planFederatedTargets } from './federated.js';
 import { federatedProviders, findInTree } from '../../domo/federated.js';
 
@@ -660,7 +662,35 @@ async function tryCloudAmplifier(ctx, explicit) {
 	}
 
 	source = applyCustomSqlOverrides(source, datasource, mappings, ctx.issue);
-	const result = await matchCloudAmplifier({ source, integrations, mappings, browser: ca.browser ?? null });
+	if (ca.snowflakeViews) {
+		try {
+			const prepared = await ca.snowflakeViews(source, { label: datasource.published?.name || datasource.caption || datasource.id, planOnly: Boolean(ctx.planOnly) });
+			for (const i of prepared.issues) ctx.issue(i.severity, i.code, i.message, i.suggestion);
+			if (prepared.source) source = prepared.source;
+		} catch (err) {
+			ctx.issue('warning', 'data.snowflake-views-failed', `Creating Snowflake views failed: ${err.message}`, 'Check the SNOWFLAKE_* settings and the role\'s CREATE VIEW grant on SNOWFLAKE_VIEW_SCHEMA.');
+		}
+	}
+	let scripted = null;
+	let matchSource = source;
+	if (planTargets(source).initialSql) {
+		const inlined = inlineInitialSql(source);
+		if (inlined.source) {
+			source = inlined.source;
+			matchSource = source;
+			ctx.issue('info', 'data.initial-sql-inlined', `The Snowflake Initial SQL's temp tables were carried into the Custom SQL as ${inlined.cteCount} CTE(s), so each query becomes a SQL DataSet View over the warehouse tables.`);
+		} else if (inlined.unsupported) {
+			const pre = planInitialSqlDataflow(source, { cloudId: 'pending' });
+			if (pre.blocked) {
+				ctx.issue('info', 'data.initial-sql-inline-unsupported', `The Snowflake Initial SQL could not become SQL DataSet Views: ${inlined.unsupported}.`);
+				ctx.issue('warning', 'data.initial-sql-magic-blocked', `The Snowflake Initial SQL cannot become a Magic ETL dataflow either: ${magicBlocked(pre.blocked)}.`);
+			} else {
+				scripted = { why: inlined.unsupported };
+				matchSource = initialSqlStandIn(source, pre.dataflows);
+			}
+		}
+	}
+	const result = await matchCloudAmplifier({ source: matchSource, integrations, mappings, browser: ca.browser ?? null });
 	const conn = result.connection;
 	const suggest = (list) => {
 		const match = conn ? JSON.parse(mappingSnippet(conn)).cloudAmplifier[0].match : undefined;
@@ -715,6 +745,28 @@ async function tryCloudAmplifier(ctx, explicit) {
 	}
 
 	const info = result.info;
+	if (scripted) {
+		const tableOf = new Map();
+		for (const rel of info.relations) {
+			const key = matchSource.tables.find((t) => t.id === rel.tableId)?.scriptKey;
+			if (key && rel.kind === 'table') tableOf.set(key, rel.table);
+		}
+		const plan = planInitialSqlDataflow(source, {
+			cloudId: info.integrations[0].id,
+			name: datasource.published?.name || datasource.caption || datasource.id,
+			columns: (t) => info.tables[tableOf.get(t.key)]?.columns,
+			datasetRef: (t) => `ca:${tableOf.get(t.key)}`
+		});
+		if (plan.blocked) {
+			ctx.issue('warning', 'data.initial-sql-magic-blocked', `The Snowflake Initial SQL cannot become a Magic ETL dataflow: ${magicBlocked(plan.blocked)}.`);
+			return undefined;
+		}
+		info.relations = info.relations.filter((rel) => !matchSource.tables.find((t) => t.id === rel.tableId)?.scriptKey);
+		info.initialSqlDataflows = plan.dataflows.map((df) => ({ connectionId: df.connectionId, stages: df.stages ?? [{ definition: df.result.definition, outputs: df.outputs }], issues: df.result.issues, stats: df.result.stats }));
+		const tiles = plan.dataflows.reduce((n, df) => n + df.result.stats.tiles, 0);
+		const sqlTiles = plan.dataflows.reduce((n, df) => n + df.result.stats.sqlTiles, 0);
+		ctx.issue('info', 'data.initial-sql-magic', `The Snowflake Initial SQL could not become SQL DataSet Views (${scripted.why}), so it runs as a Magic ETL dataflow on the warehouse: ${tiles} tile(s)${sqlTiles ? `, ${sqlTiles} of them SQL tiles` : ''}, reading ${tableOf.size} Cloud Amplifier table(s).`);
+	}
 	if (published) {
 		info.source = {
 			tables: published.tables ?? [],
@@ -747,6 +799,20 @@ async function tryCloudAmplifier(ctx, explicit) {
 		ctx.issue('warning', 'data.cloud-amplifier-unverified-tables', `Table names and columns were not confirmed by browsing the integration: ${unverified.map(caLabel).join(', ')}. Registration fails at push if they are wrong.`);
 	}
 	return { strategy: 'cloud-amplifier', tables: [], cloudAmplifier: info };
+}
+
+function magicBlocked(b) {
+	const where = b.statement >= 0 ? `statement ${b.statement + 1}` : `query '${b.output ?? '?'}'`;
+	return `${where} (${oneLine(b.excerpt ?? '', 120)}) ${b.reason}`;
+}
+
+function initialSqlStandIn(source, dataflows) {
+	const scripted = new Set(dataflows.flatMap((df) => df.outputs.map((o) => o.tableId)));
+	const inputs = dataflows.flatMap((df) =>
+		df.tables.map((t, i) => ({ id: `t2d-initial-sql-${df.connectionId}-${i}`, name: t.name, kind: 'table', table: `[${t.database}].[${t.schema}].[${t.name}]`, connectionId: df.connectionId, scriptKey: t.key }))
+	);
+	const connections = (source.connections ?? []).map((c) => (c.extra ? { ...c, extra: Object.fromEntries(Object.entries(c.extra).filter(([k]) => !INITIAL_SQL_KEYS.includes(k))) } : c));
+	return { ...source, connections, tables: [...inputs, ...(source.tables ?? []).filter((t) => !scripted.has(t.id))] };
 }
 
 /* Hyper */
@@ -982,6 +1048,12 @@ async function tryPublishedExtract(ctx, explicit) {
 
 		const mappingSource = publishedMappingSource(datasource, published);
 		const tables = await exportPackagedHyper(ctx, pkg, hyperFiles, mappingSource, { keep: [PUBLISHED_SOURCE_FILE] });
+		// A workbook sees only the logical tables; the joins inside one, and the physical columns they use, live in the .tds.
+		if (published.relationTree && !datasource.relationTree) {
+			datasource.tables = structuredClone(published.tables ?? []);
+			datasource.relationships = structuredClone(published.relationships ?? []);
+			datasource.relationTree = structuredClone(published.relationTree);
+		}
 		const { added, replaced } = mergePublishedFields(datasource, published, { extractedFieldIds: ctx.extractedFieldIds });
 		const merged = [...replaced, ...added];
 		if (merged.length) {

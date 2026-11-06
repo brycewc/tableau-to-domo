@@ -47,6 +47,7 @@ export const EXTRACT_OPTIONS = {
 		description: 'ask | export | fail: a datasource no mapping covers that would be exported as a snapshot (default ask; without a terminal, --json or --yes it stops like fail; export exports as before)'
 	},
 	'no-domo-lookup': { type: 'boolean', description: 'Make no read-only Domo calls (Cloud Amplifier, federated and connector account matching) during extract' },
+	'snowflake-views': { type: 'boolean', description: 'Turn Snowflake Initial SQL temp tables and the Custom SQL over them into views in SNOWFLAKE_VIEW_SCHEMA, so Cloud Amplifier reads them live (needs SNOWFLAKE_* settings; without them the DDL is written for review)' },
 	'no-extract-data': { type: 'boolean', description: 'Download the workbook without its packaged extract; undecided datasources get no data instead of a question' },
 	'no-metadata': { type: 'boolean', description: 'Skip the Tableau Metadata API lookup' },
 	'no-published-fields': { type: 'boolean', description: 'Do not merge field definitions from published datasource .tds files' },
@@ -185,6 +186,7 @@ export function extractOptionsFrom(values) {
 		metadata: !values['no-metadata'],
 		publishedFields: !values['no-published-fields'],
 		domoLookup: !values['no-domo-lookup'],
+		snowflakeViews: Boolean(values['snowflake-views']),
 		refreshShared: Boolean(values['refresh-data'])
 	};
 }

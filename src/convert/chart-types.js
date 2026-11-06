@@ -326,6 +326,7 @@ function finish(ctx, result) {
 	if (result.sortOnly?.length) out.sortOnly = result.sortOnly;
 	if (result.keptHeaders?.length) out.keptHeaders = result.keptHeaders;
 	if (result.spread) out.spread = result.spread;
+	if (result.overrides) out.overrides = result.overrides;
 	return out;
 }
 
@@ -586,6 +587,34 @@ function combinedCategory(ctx, axis, colorDims, paneSeries) {
 }
 
 /** One measure on both axes, colored on one pane only: Domo line+bar would bar every member but the last, so keep the colored pane. */
+const MAX_MEMBER_LINES = 12;
+
+/** Members of a color dimension that no parameter drives, from the Tableau color legend and the sheet's filters. */
+function fixedSeriesMembers(ctx, series) {
+	const { ws, ir } = ctx;
+	const field = findField(ir, series.pill?.datasourceId, series.pill?.fieldId);
+	if (!field || field.kind === 'parameter' || dependsOnParameter(ir, field)) return undefined;
+	if (ws.color?.pillId !== series.pillId) return undefined;
+	const filter = (ws.filters ?? []).find((f) => f.fieldId === series.pill?.fieldId && f.kind === 'categorical');
+	let members = (ws.color.members ?? []).map((m) => String(m.value)).filter((v) => v !== '' && v !== '%null%');
+	if (filter?.include?.length) members = members.filter((v) => filter.include.includes(v));
+	if (filter?.exclude?.length) members = members.filter((v) => !filter.exclude.includes(v));
+	return members.length && members.length <= MAX_MEMBER_LINES ? [...new Set(members)] : undefined;
+}
+
+function dependsOnParameter(ir, field, seen = new Set()) {
+	if (!field || seen.has(field.id)) return false;
+	seen.add(field.id);
+	const formula = field.formula ?? '';
+	if (/\[Parameters\]/.test(formula)) return true;
+	const ds = (ir.datasources ?? []).find((d) => (d.fields ?? []).includes(field));
+	for (const m of formula.matchAll(/\[([^\]]+)\]/g)) {
+		const ref = (ds?.fields ?? []).find((f) => f.id === `[${m[1]}]`);
+		if (ref && ref !== field && dependsOnParameter(ir, ref, seen)) return true;
+	}
+	return false;
+}
+
 function singlePaneColorFamily(ctx, series, measure, barPane, linePane) {
 	const { a, ws, out } = ctx;
 	const colors = (p) => p?.encodings?.color ?? [];
@@ -596,7 +625,14 @@ function singlePaneColorFamily(ctx, series, measure, barPane, linePane) {
 	if (!line && !bar) return undefined;
 	const dim = nameOf(series);
 	if (line) {
-		out.warnings.push(issue(ws, 'warning', 'chart.dual-axis', `Dual axis total bar (${nameOf(measure)}) dropped: Domo line+bar draws every ${dim} member but the last as bars; the per-${dim} lines are kept`));
+		const members = fixedSeriesMembers(ctx, series);
+		if (members) {
+			out.warnings.push(issue(ws, 'info', 'chart.dual-axis', `Dual axis total bar (${nameOf(measure)}) + one line per ${dim}: a card Beast Mode per member (${members.join(', ')}) draws its line`));
+			out.memberLines = { seriesPillId: series.pillId, members };
+			return 'combo';
+		}
+		out.warnings.push(issue(ws, 'warning', 'chart.dual-axis', `Dual axis total bar (${nameOf(measure)}) drawn as Domo's total line: ${dim} depends on a parameter or has too many members for a line per member, so the per-${dim} lines are kept and the total is one more line`));
+		out.totalLine = true;
 		return 'line';
 	}
 	out.warnings.push(issue(ws, 'warning', 'chart.dual-axis', `Dual axis total line (${nameOf(measure)}) dropped: Domo line+bar draws only the last ${dim} member as a line; the per-${dim} bars are kept`));
@@ -744,6 +780,13 @@ function axisChart(ctx, family, dualPanes) {
 	const detail = detailDims(ctx, [item, series, ...(combined?.levels ?? [])].filter(Boolean)).map((c) => c.pillId);
 	const v = horizontal ? 'horiz' : 'vert';
 
+	if (family === 'combo' && out.memberLines) {
+		const { seriesPillId, members } = out.memberLines;
+		delete out.memberLines;
+		const lines = members.map((member, i) => slot(primary, 'SERIES', 'measure', { pillId: `${primary.pillId}#member-${i}`, derived: { type: 'member', seriesPillId, measurePillId: primary.pillId, member } }));
+		const kept = mappings.filter((m) => m.mapping !== 'SERIES' && m.mapping !== 'VALUE');
+		return { chartType: 'badge_vert_bar_line', family, mappings: [...kept, slot(primary, 'SERIES', 'measure'), ...lines], detail, overrides: { set_line_count: String(members.length) } };
+	}
 	if (family === 'combo') {
 		if (!measureSeries && !series) {
 			out.warnings.push(issue(ws, 'warning', 'chart.dual-axis', 'Dual axis bar + line plots a single measure; drawn as bars'));
@@ -755,7 +798,9 @@ function axisChart(ctx, family, dualPanes) {
 	}
 	if (family === 'line') {
 		if (horizontal) out.warnings.push(issue(ws, 'info', 'chart.orientation', 'Vertical (rotated) line drawn as a regular left-to-right line'));
-		return { chartType: 'badge_two_trendline', family, mappings, detail };
+		const totalLine = out.totalLine ? { overrides: { show_total_line: 'true' } } : {};
+		delete out.totalLine;
+		return { chartType: 'badge_two_trendline', family, mappings, detail, ...totalLine };
 	}
 	if (family === 'area') {
 		if (horizontal) out.warnings.push(issue(ws, 'info', 'chart.orientation', 'Vertical (rotated) area drawn left to right'));

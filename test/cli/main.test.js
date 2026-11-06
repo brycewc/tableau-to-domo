@@ -138,8 +138,10 @@ test('convert and extract option mapping', () => {
 		metadata: true,
 		publishedFields: true,
 		domoLookup: true,
+		snowflakeViews: false,
 		refreshShared: false
 	});
+	assert.equal(extractOptionsFrom({ file: 'a.twbx', 'snowflake-views': true }).snowflakeViews, true);
 	assert.equal(extractOptionsFrom({ file: 'a.twbx', 'no-published-fields': true }).publishedFields, false);
 	assert.throws(() => extractOptionsFrom({ workbook: 'a', 'data-strategy': 'csv' }), UsageError);
 	assert.equal(extractOptionsFrom({ workbook: 'a', unmapped: 'export' }).unmapped, 'export');

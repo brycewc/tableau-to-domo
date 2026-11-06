@@ -1,5 +1,9 @@
 const FUNCTIONS = '/query/v1/functions';
-const VALIDATE_BATCH = 200;
+const VALIDATE_BATCH = 50;
+// Domo validates long expressions at about 1,000 characters a second, and a gateway cuts calls off after a few minutes.
+const VALIDATE_BATCH_CHARS = 60000;
+const VALIDATE_CONCURRENCY = 4;
+const VALIDATE_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * @typedef {Object} ValidationOutcome
@@ -23,21 +27,33 @@ const VALIDATE_BATCH = 200;
  */
 export async function validateExpressions(c, datasetId, items) {
 	const out = new Map();
-	for (let offset = 0; offset < items.length; offset += VALIDATE_BATCH) {
-		const batch = items.slice(offset, offset + VALIDATE_BATCH);
+	const batches = [];
+	let batch = [];
+	let size = 0;
+	for (const item of items) {
+		const length = String(item.expression ?? '').length;
+		if (batch.length && (batch.length >= VALIDATE_BATCH || size + length > VALIDATE_BATCH_CHARS)) {
+			batches.push(batch);
+			batch = [];
+			size = 0;
+		}
+		batch.push(item);
+		size += length;
+	}
+	if (batch.length) batches.push(batch);
+	const validate = async (list) => {
 		const functionTemplates = {};
 		const keyById = new Map();
-		batch.forEach((item, i) => {
+		list.forEach((item, i) => {
 			const id = String(-(i + 1));
 			keyById.set(id, item.key);
 			functionTemplates[id] = { name: item.name || item.key, expression: item.expression };
 		});
-		const res = await c.post(`${FUNCTIONS}/validateFunctions`, { dataSourceId: datasetId, functionTemplates }, { idempotent: true });
+		const res = await c.post(`${FUNCTIONS}/validateFunctions`, { dataSourceId: datasetId, functionTemplates }, { idempotent: true, timeoutMs: VALIDATE_TIMEOUT_MS });
 		const results = res?.results || {};
-		for (const [id, key] of keyById) {
-			out.set(key, toOutcome(results[id]));
-		}
-	}
+		for (const [id, key] of keyById) out.set(key, toOutcome(results[id]));
+	};
+	for (let i = 0; i < batches.length; i += VALIDATE_CONCURRENCY) await Promise.all(batches.slice(i, i + VALIDATE_CONCURRENCY).map(validate));
 	return out;
 }
 

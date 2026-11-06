@@ -213,7 +213,7 @@ export class Emitter {
 
 	not(r) {
 		if (isConst(r)) return this.boolConst(r.constant.value === null ? null : !r.constant.value);
-		// Beast Mode fails with PARSING_ERROR on NOT around a single <, >, <= or >= comparison.
+		// Beast Mode fails with PARSING_ERROR on NOT around a single <, >, <= or >= comparison, and on a parenthesis opening onto a long CASE.
 		const p = r.negated ? this.predicate(r.negated, r.sql, r.negatedPrec ?? PREC.CMP, r.prec) : this.predicate(`NOT ${r.prec >= PREC.PRIMARY ? r.sql : `(${r.sql})`}`, r.sql, PREC.NOT, r.prec);
 		if (r.notNull) p.notNull = r.notNull;
 		return p;
@@ -238,6 +238,8 @@ export class Emitter {
 			l = this.caseless(l);
 			r = this.caseless(r);
 		}
+		// Beast Mode's parser fails (PARSING_ERROR) on several WHEN conditions that each open with a long CASE.
+		if (/^CASE\b/i.test(l.sql) && !/^CASE\b/i.test(r.sql) && MIRRORED[op]) [l, r, op] = [r, l, MIRRORED[op]];
 		const [a, b] = [wrap(l, PREC.CMP + 1), wrap(r, PREC.CMP + 1)];
 		if (FLIPPED[op]) return this.predicate(`${a} ${op} ${b}`, `${a} ${FLIPPED[op]} ${b}`);
 		return this.out(`${a} ${op} ${b}`, 'boolean', PREC.CMP);
@@ -724,7 +726,8 @@ export class Emitter {
 	}
 }
 
-const FLIPPED = { '<': '>=', '<=': '>', '>': '<=', '>=': '<' };
+const MIRRORED = { '=': '=', '!=': '!=', '<': '>', '>': '<', '<=': '>=', '>=': '<=' };
+const FLIPPED = { '<': '>=', '<=': '>', '>': '<=', '>=': '<', '=': '!=', '!=': '=' };
 const LOD_SLOT_PASSTHROUGH = new Set(['Paren', 'Field', 'Lod']);
 const IN_VALUE_OPERAND_MAX = 200;
 const TRUE_TEXT = [...TRUE_VALUES].map(quoteString).join(', ');

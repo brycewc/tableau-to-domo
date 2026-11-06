@@ -179,3 +179,80 @@ test('buildSqlView aliases only the referenced tables', () => {
 	assert.deepEqual(Object.keys(view.schema.tableAliases), ['t2']);
 	assert.deepEqual(view.trigger, { dataSource: { $ref: 'dataset:y' } });
 });
+
+test('an Initial SQL dataflow reads its registered tables and its output is the card target', () => {
+	const ds = {
+		id: 'federated.9',
+		caption: 'Scripted',
+		connections: [{ id: 'c', class: 'snowflake', extra: {} }],
+		tables: [{ id: 'Q', name: 'Custom SQL Query', kind: 'custom-sql', connectionId: 'c', sql: 'select * from tmp', columns: [col('REGION', '[Region]', 'string'), col('N', '[N]', 'integer')] }],
+		relationships: [],
+		fields: [field('[Region]', 'Region'), field('[N]', 'N', 'integer')],
+		filters: []
+	};
+	const definition = {
+		name: 'Scripted (Initial SQL)',
+		databaseType: 'ADR',
+		actions: [
+			{ id: 'in-a', type: 'LoadFromVault', dataSourceId: 'ca:0' },
+			{ id: 'in-b', type: 'LoadFromVault', dataSourceId: 'ca:1' },
+			{ id: 'out', type: 'PublishToVault', dependsOn: ['in-a', 'in-b'], dataSource: { name: 'Scripted - Custom SQL Query' } }
+		]
+	};
+	const manifest = {
+		datasourceId: 'federated.9',
+		strategy: 'cloud-amplifier',
+		tables: [],
+		issues: [],
+		cloudAmplifier: {
+			integrations: [{ id: 'int-1', name: 'Prod', engine: 'SNOWFLAKE' }],
+			matchedBy: 'browse',
+			tables: [caTable('A', [{ name: 'REGION', type: 'STRING' }]), caTable('B', [{ name: 'N', type: 'LONG' }])],
+			relations: [],
+			initialSqlDataflows: [{ connectionId: 'c', definition, outputs: [{ tableId: 'Q', name: 'Scripted - Custom SQL Query', columns: [{ name: 'REGION', type: 'STRING' }, { name: 'N', type: null }] }], issues: [] }]
+		}
+	};
+	const { datasets, dataflows, issues } = planDatasets(ir(ds), [manifest], { workbookKey: 'wb' });
+	const output = datasets.find((d) => d.strategy === 'dataflow-output');
+	assert.equal(output.key, 'wb.scripted');
+	assert.equal(output.cardTarget, true);
+	assert.deepEqual(output.schema, [{ name: 'REGION', type: 'STRING' }, { name: 'N', type: 'STRING' }]);
+	assert.deepEqual(output.fieldMap, { '[Region]': 'REGION', '[N]': 'N' });
+	assert.deepEqual(datasets.filter((d) => d.strategy === 'cloud-amplifier').map((d) => d.key), ['wb.scripted.a', 'wb.scripted.b']);
+	assert.equal(dataflows.length, 1);
+	assert.deepEqual(dataflows[0].outputDatasetKeys, ['wb.scripted']);
+	assert.deepEqual(output.dataflowOutput, { dataflowKey: dataflows[0].key, outputName: 'Scripted - Custom SQL Query' });
+	assert.deepEqual(dataflows[0].definition.actions.slice(0, 2).map((a) => a.dataSourceId), [{ $ref: 'dataset:wb.scripted.a' }, { $ref: 'dataset:wb.scripted.b' }]);
+	assert.ok(issues.some((i) => i.code === 'data.initial-sql-magic-refresh'));
+});
+
+test('a split Initial SQL dataflow chains its stages through an intermediate dataset', () => {
+	const ds = {
+		id: 'federated.10',
+		caption: 'Split',
+		connections: [{ id: 'c', class: 'snowflake', extra: {} }],
+		tables: [{ id: 'Q', name: 'Custom SQL Query', kind: 'custom-sql', connectionId: 'c', sql: 'select * from tmp', columns: [col('REGION', '[Region]', 'string')] }],
+		relationships: [],
+		fields: [field('[Region]', 'Region')],
+		filters: []
+	};
+	const step = 'Split (Initial SQL) step 1 - tmp';
+	const stages = [
+		{ definition: { name: 'Split (Initial SQL) 1', actions: [{ id: 'in', type: 'LoadFromVault', dataSourceId: 'ca:0' }, { id: 'mid', type: 'PublishToVault', dependsOn: ['in'] }] }, outputs: [{ name: step, intermediate: true, columns: [{ name: 'REGION', type: 'STRING' }] }] },
+		{ definition: { name: 'Split (Initial SQL) 2', actions: [{ id: 'in', type: 'LoadFromVault', dataSourceId: `stage:${step}` }, { id: 'out', type: 'PublishToVault', dependsOn: ['in'] }] }, outputs: [{ tableId: 'Q', name: 'Split - Custom SQL Query', columns: [{ name: 'REGION', type: 'STRING' }] }] }
+	];
+	const manifest = {
+		datasourceId: 'federated.10',
+		strategy: 'cloud-amplifier',
+		tables: [],
+		issues: [],
+		cloudAmplifier: { integrations: [{ id: 'int-1', name: 'Prod', engine: 'SNOWFLAKE' }], matchedBy: 'browse', tables: [caTable('A', [{ name: 'REGION', type: 'STRING' }])], relations: [], initialSqlDataflows: [{ connectionId: 'c', stages, issues: [] }] }
+	};
+	const { datasets, dataflows } = planDatasets(ir(ds), [manifest], { workbookKey: 'wb' });
+	assert.deepEqual(dataflows.map((d) => d.key), ['wb.split.initial-sql-1', 'wb.split.initial-sql-2']);
+	const mid = datasets.find((d) => d.name === step);
+	assert.equal(mid.cardTarget, false);
+	assert.deepEqual(dataflows[0].outputDatasetKeys, [mid.key]);
+	assert.deepEqual(dataflows[1].definition.actions[0].dataSourceId, { $ref: `dataset:${mid.key}` });
+	assert.equal(datasets.find((d) => d.cardTarget).key, 'wb.split');
+});

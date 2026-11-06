@@ -252,7 +252,7 @@ describe('table calculations', () => {
 			assert.equal(translateCalc("LOOKUP(SUM([Sales]), CASE [Parameters].[Grain] WHEN 'quarter' THEN -4 ELSE -1 END)", ctx()).expression, `CASE \`Grain\` WHEN 'quarter' THEN ${lag(4)} ELSE ${lag(1)} END`);
 			assert.equal(
 				translateCalc("LOOKUP(SUM([Sales]), IIF([Parameters].[Grain] = 'quarter', -4, 2))", ctx()).expression,
-				`CASE WHEN \`Grain\` = 'quarter' THEN ${lag(4)} WHEN NOT (\`Grain\` = 'quarter') THEN LEAD(SUM(\`Sales\`), 2) OVER (ORDER BY \`Order Date\`) END`
+				`CASE WHEN \`Grain\` = 'quarter' THEN ${lag(4)} WHEN \`Grain\` != 'quarter' THEN LEAD(SUM(\`Sales\`), 2) OVER (ORDER BY \`Order Date\`) END`
 			);
 		});
 

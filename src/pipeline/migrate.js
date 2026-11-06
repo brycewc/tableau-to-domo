@@ -62,6 +62,7 @@ export async function migrateWorkbook(opts) {
 		metadata: opts.metadata,
 		publishedFields: opts.publishedFields,
 		domoLookup: opts.domoLookup,
+		snowflakeViews: opts.snowflakeViews,
 		selection: opts.selection,
 		client: opts.client,
 		sharedCache: opts.sharedCache,

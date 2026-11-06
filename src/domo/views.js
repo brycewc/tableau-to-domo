@@ -58,6 +58,9 @@ async function withResponsibleUser(c, body) {
 	return { ...body, responsibleUserId: me.id };
 }
 
+// Domo runs the view query on the warehouse before answering, which can take minutes.
+const SQL_VIEW_TIMEOUT_MS = 15 * 60 * 1000;
+
 /**
  * Create a SQL DataSet View (`POST /query/v1/views`, the Views Explorer API).
  * `schema.viewTemplate.version` is 'advancedEditorSql' and `schema.tableAliases` maps SQL aliases to dataset ids.
@@ -66,7 +69,7 @@ async function withResponsibleUser(c, body) {
  * @returns {Promise<{ dataSourceId: string }>}
  */
 export async function createSqlView(c, body) {
-	const res = await c.post('/query/v1/views', await withResponsibleUser(c, { lastModified: String(Date.now()), ...body }), { idempotent: false });
+	const res = await c.post('/query/v1/views', await withResponsibleUser(c, { lastModified: String(Date.now()), ...body }), { idempotent: false, timeoutMs: SQL_VIEW_TIMEOUT_MS });
 	if (!res?.dataSourceId) throw new Error(`createSqlView: response had no dataSourceId: ${JSON.stringify(res).slice(0, 500)}`);
 	return res;
 }
@@ -77,5 +80,5 @@ export async function createSqlView(c, body) {
  * @param {Object} body
  */
 export async function updateSqlView(c, id, body) {
-	return c.put(`/query/v1/views/${encodeURIComponent(id)}`, await withResponsibleUser(c, { lastModified: String(Date.now()), ...body }));
+	return c.put(`/query/v1/views/${encodeURIComponent(id)}`, await withResponsibleUser(c, { lastModified: String(Date.now()), ...body }), { timeoutMs: SQL_VIEW_TIMEOUT_MS });
 }

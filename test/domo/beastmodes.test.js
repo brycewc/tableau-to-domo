@@ -36,6 +36,20 @@ test('validateExpressions maps keys to -1, -2 and back', async () => {
 	assert.match(out.get('calc:b').message, /INVALID_COLUMN: invalid columns Nope/);
 });
 
+test('validateExpressions splits long expressions into separate calls', async () => {
+	const { client } = testClient();
+	const reply = { method: 'POST', path: '/query/v1/functions/validateFunctions', json: { results: { '-1': { status: 'VALID' }, '-2': { status: 'VALID' } } } };
+	mock = mockFetch([reply, reply, reply]);
+	const long = 'x'.repeat(40000);
+	const out = await validateExpressions(client, 'ds-1', [
+		{ key: 'a', expression: long },
+		{ key: 'b', expression: long },
+		{ key: 'c', expression: 'SUM(1)' }
+	]);
+	assert.deepEqual(mock.calls.map((call) => Object.keys(jsonBody(call).functionTemplates).length).sort(), [1, 2]);
+	assert.deepEqual([...out.values()].map((o) => o.valid), [true, true, true]);
+});
+
 test('createBeastMode sends a dataset link and no owner or strict', async () => {
 	const { client } = testClient();
 	mock = mockFetch([{ method: 'POST', path: '/query/v1/functions/template', json: { id: 10, legacyId: 'calculation_x' } }]);

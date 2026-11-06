@@ -106,6 +106,20 @@ export function domoConfigured(config) {
  * fetched on first use; `browser` exists once `getIntegrations()` has resolved.
  * @param {{ config: import('../config.js').T2DConfig, emitter: import('../util/events.js').Emitter, domo?: { client?: any, api?: any, getDataset?: Function } }} opts
  */
+async function snowflakeViewsHandler({ config, ws, emitter, deps }) {
+	const sf = config.snowflake ?? {};
+	const [database, schema] = String(sf.viewSchema ?? '').split('.');
+	if (!database || !schema) throw new Error('--snowflake-views needs SNOWFLAKE_VIEW_SCHEMA as DATABASE.SCHEMA');
+	const { createSnowflakeViews } = await import('./snowflake-views.js');
+	let client = deps?.snowflake ?? null;
+	if (!client && sf.account && sf.user && (sf.pat || sf.privateKeyPath)) {
+		const { createSnowflakeClient } = await import('../snowflake/client.js');
+		client = createSnowflakeClient(sf);
+	}
+	if (!client) emitter.warn('Snowflake settings are incomplete (SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER and SNOWFLAKE_PAT or SNOWFLAKE_PRIVATE_KEY_PATH); view DDL is written for review instead');
+	return createSnowflakeViews({ client, target: { database, schema }, dir: path.join(ws.root, 'snowflake'), emitter });
+}
+
 export function cloudAmplifierLookup({ config, emitter, domo = {} }) {
 	let integrations;
 	let browser = null;
@@ -410,7 +424,7 @@ const PHYSICAL_KEYS = ['connections', 'tables', 'relationships', 'relationTree']
 
 /** Connections and tables an extraction took from the published datasource (connector strategy), to replay on every workbook. */
 function physicalLayerChange(before, after) {
-	if (JSON.stringify(before.connections) === JSON.stringify(after.connections)) return {};
+	if (PHYSICAL_KEYS.every((k) => JSON.stringify(before[k]) === JSON.stringify(after[k]))) return {};
 	return { physical: Object.fromEntries(PHYSICAL_KEYS.filter((k) => after[k] !== undefined).map((k) => [k, after[k]])) };
 }
 
@@ -430,7 +444,7 @@ async function extractSharedDatasource({ ws, t, slug, p, ds, dsSlug, client, ir,
 	const manifestFile = path.join(variantDir, 'manifest.json');
 	let remote = null;
 	if (client && t.findDatasource) remote = await t.findDatasource(client, { luid }).catch(() => null);
-	const reuseKey = shortHash({ strategy, sampleRows: sel.sampleRows ?? null, updatedAt: remote?.updatedAt ?? null, mappings: sharedMappingsHash(mappings), domo: Boolean(cloudAmplifier) });
+	const reuseKey = shortHash({ strategy, sampleRows: sel.sampleRows ?? null, updatedAt: remote?.updatedAt ?? null, mappings: sharedMappingsHash(mappings), domo: Boolean(cloudAmplifier), ...(cloudAmplifier?.snowflakeViews ? { snowflakeViews: true } : {}) });
 	const cacheKey = `${luid}:${sel.sampleRows ?? ''}`;
 
 	let shared = sharedCache?.get(cacheKey)?.reuseKey === reuseKey ? sharedCache.get(cacheKey).manifest : null;
@@ -657,6 +671,7 @@ export async function extractWorkbook({
 	metadata = true,
 	publishedFields = true,
 	domoLookup = true,
+	snowflakeViews = false,
 	selection,
 	client: givenClient,
 	sharedCache,
@@ -829,6 +844,7 @@ export async function extractWorkbook({
 			domoLookup && ['auto', 'cloud-amplifier'].includes(dataStrategy) && (deps?.domo || domoConfigured(config))
 				? cloudAmplifierLookup({ config, emitter, domo: deps?.domo })
 				: undefined;
+		if (cloudAmplifier && snowflakeViews) cloudAmplifier.snowflakeViews = await snowflakeViewsHandler({ config, ws, emitter, deps });
 
 		const federated =
 			domoLookup && ['auto', 'federated'].includes(dataStrategy) && (deps?.domo || domoConfigured(config)) ? federatedLookup({ config, emitter, domo: deps?.domo }) : undefined;

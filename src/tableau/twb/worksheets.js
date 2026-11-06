@@ -231,6 +231,7 @@ export function parseWorksheet(node, ctx) {
 	const filters = [];
 	/** @type {string[]} */
 	const measureValues = [];
+	const hiddenMeasures = new Set();
 	for (const f of view?.all('filter') || []) {
 		const column = f.attr('column');
 		if (!column) continue;
@@ -238,6 +239,7 @@ export function parseWorksheet(node, ctx) {
 		if (pill.fieldId === MEASURE_NAMES) {
 			for (const facet of parseFilter(f, { resolvePill })) {
 				for (const value of facet.include || []) if (typeof value === 'string') measureValues.push(resolvePill(value).id);
+				for (const value of facet.exclude || []) if (typeof value === 'string') hiddenMeasures.add(resolvePill(value).id);
 			}
 			continue;
 		}
@@ -316,7 +318,7 @@ export function parseWorksheet(node, ctx) {
 		filters,
 		sorts,
 		aggregated: aggregation !== 'false',
-		measureValues: [...new Set(measureValues)],
+		measureValues: [...new Set(measureValues)].filter((id) => !hiddenMeasures.has(id)),
 		hidden: ctx.hidden.has(name)
 	};
 	if (title) {

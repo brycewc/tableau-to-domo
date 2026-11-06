@@ -282,6 +282,9 @@ test('migrateBatch filters by workbook names and luids and rejects unknown names
 	const summary = await migrateBatch({ config: testConfig(root), all: true, workbooks: ['al*', 'w3'], skipPush: true, deps });
 	assert.deepEqual(seen, ['w1', 'w3']);
 	assert.deepEqual(summary.counts, { converted: 2 });
+	seen.length = 0;
+	await migrateBatch({ config: testConfig(root), all: true, workbooks: ['w2, W3,Alpha'], skipPush: true, deps });
+	assert.deepEqual(seen, ['w1', 'w2', 'w3'], 'a comma list mixes luids and names');
 	await assert.rejects(migrateBatch({ config: testConfig(root), all: true, workbooks: ['Nope'], deps }), SelectionError);
 	await assert.rejects(migrateBatch({ config: testConfig(root), deps }), /needs a project, all/);
 });
