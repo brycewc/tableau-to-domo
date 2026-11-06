@@ -318,4 +318,10 @@ test('applyThemeOverrides sets the mapped table style to the workbook table look
 	assert.ok(['headerFontColor', 'totalRowFontColor', 'subtotalRowFontColor'].every((k) => t[k].value === auto), 'text on the fills is the automatic font color');
 	const plain = applyThemeOverrides(clarion, { table: { ...table, bandColor: null, borderType: 'NONE', borderColor: null } }).theme.tables.find((s) => s.id === clarion.mappings.table);
 	assert.deepEqual([plain.alternatingRowColorEnabled, plain.tableBorderType, plain.tableBorderWeight], [false, 'NONE', 0]);
+	const white = applyThemeOverrides(clarion, { table: { ...table, totalColor: '#A6AEFF', totalTextColor: '#ffffff', subtotalTextColor: '#123456' } });
+	const w = white.theme.tables.find((s) => s.id === clarion.mappings.table);
+	const font = (ref) => white.theme.colors.find((c) => c.id === ref.value);
+	assert.deepEqual([font(w.totalRowFontColor).value.value, font(w.totalRowFontColor).tags], ['#FFFFFF', ['FONT']], "Tableau's totals text color is set, not automatic");
+	assert.equal(w.subtotalRowFontColor.value, auto, 'a color with no theme font color stays automatic');
+	assert.match(white.notes.join(' '), /no theme font color #123456/);
 });

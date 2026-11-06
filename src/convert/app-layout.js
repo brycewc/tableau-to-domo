@@ -1006,6 +1006,8 @@ export function sheetTableStyle(ws, workbook = {}) {
 		bandColor: banded ? (opaqueHex(s.rowBandColor) ?? TABLEAU_TABLE.band) : null,
 		totalColor: opaqueHex(s.totalBackground) ?? rowColor,
 		subtotalColor: opaqueHex(s.subtotalBackground) ?? rowColor,
+		totalTextColor: opaqueHex(s.totalColor ?? s.subtotalColor) ?? null,
+		subtotalTextColor: opaqueHex(s.subtotalColor) ?? null,
 		borderType: s.rowDividers === false ? 'NONE' : dimensions > 1 ? 'HORIZONTAL' : 'BELOW_HEADER',
 		borderColor: s.rowDividers === false ? null : (opaqueHex(s.rowDividerColor) ?? TABLEAU_TABLE.divider)
 	};

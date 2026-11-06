@@ -788,6 +788,8 @@ export const PLAN_VERSION = 1;
  * @property {string|null} bandColor            Alternate row color (null: no banding)
  * @property {string} totalColor                Total row background
  * @property {string} subtotalColor             Subtotal row background
+ * @property {string|null} totalTextColor       Total row text (null: automatic)
+ * @property {string|null} subtotalTextColor    Subtotal row text (null: automatic)
  * @property {'ALL'|'BELOW_HEADER'|'HORIZONTAL'|'NONE'|'VERTICAL'} borderType
  * @property {string|null} borderColor
  *

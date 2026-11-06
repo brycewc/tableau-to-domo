@@ -345,7 +345,7 @@ test('buildAppLayout without groups or buttons is buildLayout, so plain views do
 test('workbookTableStyle takes the most common crosstab look, Tableau defaults where a sheet sets none', async () => {
 	const { sheetTableStyle, workbookTableStyle } = await import('../../src/convert/app-layout.js');
 	const nested = { name: 'A', rowPills: ['r1', 'r2', 'm'], pills: { r1: {}, r2: {}, m: { continuous: true } } };
-	assert.deepEqual(sheetTableStyle(nested), { rowColor: '#FFFFFF', bandColor: '#F5F5F5', totalColor: '#FFFFFF', subtotalColor: '#FFFFFF', borderType: 'HORIZONTAL', borderColor: '#CBCBCB' });
+	assert.deepEqual(sheetTableStyle(nested), { rowColor: '#FFFFFF', bandColor: '#F5F5F5', totalColor: '#FFFFFF', subtotalColor: '#FFFFFF', totalTextColor: null, subtotalTextColor: null, borderType: 'HORIZONTAL', borderColor: '#CBCBCB' });
 	const shaded = { ...nested, name: 'B', tableStyle: { totalBackground: '#00000000', subtotalBackground: '#d4d4d4' } };
 	assert.deepEqual([sheetTableStyle(shaded).totalColor, sheetTableStyle(shaded).subtotalColor], ['#FFFFFF', '#D4D4D4'], 'None is the row color');
 	const flat = { name: 'C', rowPills: ['r1'], pills: { r1: {} }, tableStyle: { rowBandSize: 0, rowDividers: false } };

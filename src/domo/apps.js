@@ -160,6 +160,13 @@ export function applyThemeOverrides(theme, overrides) {
 		// The fills turn light or dark, so header and total text follow the automatic font color (TV: FONT colors only).
 		const auto = out.colors.find((c) => c.value?.type === 'AUTOMATIC_COLOR');
 		if (auto) for (const key of ['headerFontColor', 'totalRowFontColor', 'subtotalRowFontColor']) table[key] = colorRef(auto.id);
+		// Tableau's own totals text color wins over automatic, which picks black on a light fill such as #A6AEFF.
+		const fontColor = (hex) => hex && out.colors.find((c) => c.value?.type === 'RGB_HEX' && (c.tags ?? []).includes('FONT') && String(c.value.value).toUpperCase() === String(hex).toUpperCase());
+		for (const [key, hex] of [['totalRowFontColor', t.totalTextColor], ['subtotalRowFontColor', t.subtotalTextColor]]) {
+			const font = fontColor(hex);
+			if (font) table[key] = colorRef(font.id);
+			else if (hex) notes.push(`no theme font color ${String(hex).toUpperCase()} for the ${key === 'totalRowFontColor' ? 'total' : 'subtotal'} row text; it stays automatic`);
+		}
 	}
 	if (overrides.buttonBackground) {
 		const button = mapping('buttons', 'button');
