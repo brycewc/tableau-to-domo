@@ -40,6 +40,8 @@ function isParametersDatasource(node) {
 	return node.attr('hasconnection') === 'false' && cols.length > 0 && cols.every((c) => c.attr('param-domain-type'));
 }
 
+const LEGEND_CARDS = new Set(['color', 'size', 'shape', 'map']);
+
 function windowsInfo(root) {
 	const windows = root.child('windows');
 	const hidden = new Set();
@@ -47,6 +49,7 @@ function windowsInfo(root) {
 	const order = new Map();
 	const byUuid = new Map();
 	const filterCards = new Map();
+	const windowCards = new Map();
 	for (const w of windows?.all('window') || []) {
 		const name = w.attr('name');
 		if (!name) continue;
@@ -55,13 +58,15 @@ function windowsInfo(root) {
 			const cards = (w.child('cards')?.all('edge') || []).flatMap((e) => e.all('strip')).flatMap((s) => s.all('card'));
 			const shown = cards.filter((c) => c.attr('type') === 'filter' && c.attr('param')).map((c) => ({ pillId: c.attr('param'), ...(c.attr('mode') ? { mode: c.attr('mode') } : {}) }));
 			if (shown.length) filterCards.set(name, shown);
+			const side = cards.map((c) => ({ kind: c.attr('type') === 'filter' ? 'filter' : c.attr('type') === 'parameter' ? 'paramctrl' : LEGEND_CARDS.has(c.attr('type')) ? 'legend' : undefined, c })).filter((x) => x.kind && x.c.attr('param'));
+			if (side.length) windowCards.set(name, side.map(({ kind, c }) => ({ kind, param: c.attr('param'), ...(c.attr('mode') ? { mode: c.attr('mode') } : {}), ...(c.attr('values') ? { values: c.attr('values') } : {}) })));
 		}
 		const uuid = w.child('simple-id')?.attr('uuid');
 		if (uuid) byUuid.set(uuid.toUpperCase(), { name, kind: w.attr('class') });
 		if (!order.has(name)) order.set(name, order.size);
 		if (w.attr('hidden') === 'true') hidden.add(name);
 	}
-	return { present: Boolean(windows), hidden, listed, order, byUuid, filterCards };
+	return { present: Boolean(windows), hidden, listed, order, byUuid, filterCards, windowCards };
 }
 
 const SHEET_KIND = { dashboard: 'dashboard', worksheet: 'worksheet', storyboard: 'story' };
@@ -231,6 +236,7 @@ export function buildWorkbookIR(xml, { sourceFile = '', info = {} } = {}) {
 	const worksheets = worksheetNodes.map((ws) => parseWorksheet(ws, { datasources: byId, hidden, issues, sharedFilters, colorEncodings: colorEncodingsByDatasource }));
 
 	for (const ws of worksheets) if (windows.filterCards.has(ws.name)) ws.quickFilters = windows.filterCards.get(ws.name);
+	for (const ws of worksheets) if (windows.windowCards.has(ws.name)) ws.windowCards = windows.windowCards.get(ws.name);
 
 	const sheetsByName = new Map(worksheets.map((w) => [w.name, w]));
 	for (const zone of dashboards.flatMap((d) => [...d.zones, ...d.floating])) {

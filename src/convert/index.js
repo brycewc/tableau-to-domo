@@ -13,6 +13,7 @@ import { dashboardFilterScopes } from './filters.js';
 import { planCrosstabStacks } from './stack.js';
 import { pageDefaultFilters, planPages, withoutHiddenZones } from './layout.js';
 import { withSheetViews, withoutUnpublishedSheets } from './published.js';
+import { withDatePartFilterFields } from './date-part-filters.js';
 import { resolveParameterModes } from './variables.js';
 import { formatPlanSql } from './sql-format.js';
 import { hiddenScope } from './hidden-members.js';
@@ -83,6 +84,21 @@ function tableStyleIssues(ir, version, asApp) {
 			severity: 'info',
 			code: 'convert.ir-outdated',
 			message: `ir.json was extracted by an older t2d (IR version ${version}, now ${IR_VERSION}), which did not read table shading (row banding, totals and subtotals fill, row dividers), so the app's tables, totals included, take Tableau's default look`,
+			object: { type: 'workbook', name: ir.workbook?.name || 'Workbook' },
+			suggestion: 'Run t2d extract again for this workbook, then convert.'
+		}
+	];
+}
+
+function sideCardIssues(ir, version) {
+	const views = ir.workbook?.views ?? [];
+	const onDashboard = new Set((ir.dashboards ?? []).flatMap((d) => [...(d.zones ?? []), ...(d.floating ?? [])].map((z) => z.worksheet)));
+	if (version >= 18 || !(ir.worksheets ?? []).some((w) => !onDashboard.has(w.name) && views.some((v) => v.name === w.name))) return [];
+	return [
+		{
+			severity: 'info',
+			code: 'convert.ir-outdated',
+			message: `ir.json was extracted by an older t2d (IR version ${version}, now ${IR_VERSION}), which did not read the parameter controls and legends of each worksheet's own window, so a worksheet's own view shows only its filter cards`,
 			object: { type: 'workbook', name: ir.workbook?.name || 'Workbook' },
 			suggestion: 'Run t2d extract again for this workbook, then convert.'
 		}
@@ -165,7 +181,9 @@ export function outdatedIrIssues(ir, target) {
 											const windowCards = windowCardIssues(ir, version);
 											if (windowCards.length) return windowCards;
 											const tableStyle = tableStyleIssues(ir, version, asApp);
-											return tableStyle.length ? tableStyle : fiscalStartIssues(ir, version);
+											if (tableStyle.length) return tableStyle;
+											const fiscal = fiscalStartIssues(ir, version);
+											return fiscal.length ? fiscal : sideCardIssues(ir, version);
 										}
 										return [
 											{
@@ -354,7 +372,7 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 
 	log.step('Planning datasets', { workbookKey });
 	const published = resolved.unpublished ? { ir, issues: [] } : withoutUnpublishedSheets(ir);
-	const cased = applyMemberCase(withoutHiddenZones(withSheetViews(published.ir)), manifestIndex(manifests));
+	const cased = applyMemberCase(withoutHiddenZones(withDatePartFilterFields(withSheetViews(published.ir))), manifestIndex(manifests));
 	const datasetPlan = planDatasets(cased.ir, manifests, { mappings, options: resolved, workbookKey });
 	const blends = planBlends(cased.ir, datasetPlan, { options: resolved, workbookKey });
 	const planned = { ...datasetPlan, datasets: blends.datasets, dataflows: blends.dataflows };

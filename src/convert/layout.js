@@ -1050,9 +1050,9 @@ export function filterCardFor(zone, filter, binding, datasetKey, dash, workbookK
 			{ ...r, mapping: 'MAX', aggregation: 'MAX' }
 		];
 	} else {
-		chartType = CATEGORICAL_SELECTORS[mode] ?? 'badge_dropdown_selector';
-		// Tableau's "Multiple Values (dropdown)".
-		if (chartType === 'badge_dropdown_selector' && (mode === 'checkdropdown' || !mode)) overrides.allow_multi_select = 'true';
+		// No mode is Tableau's default card, "Multiple Values (list)".
+		chartType = CATEGORICAL_SELECTORS[mode || 'checklist'] ?? 'badge_dropdown_selector';
+		if (chartType === 'badge_dropdown_selector' && mode === 'checkdropdown') overrides.allow_multi_select = 'true';
 		columns = [{ ...r, mapping: 'ITEM' }];
 		groupBy = [{ ...r }];
 		orderBy = [{ ...r, order: 'ASCENDING' }];
@@ -1119,9 +1119,9 @@ function aggregateFilterCard(zone, filter, binding, datasetKey, dash, workbookKe
 	const sheet = zone.worksheet;
 	if (!at) issues.push(makeIssue(dash, 'info', 'layout.filter-aggregate', `Filter card on aggregate ${label} lists its range or values over the whole dataset: worksheet ${sheet} has no card on its dataset to take the marks from`));
 	const range = filter.kind === 'quantitative' || filter.kind === 'range-date';
-	const chartType = range ? 'badge_range_selector' : (CATEGORICAL_SELECTORS[String(zone.mode ?? '').toLowerCase()] ?? 'badge_dropdown_selector');
+	const chartType = range ? 'badge_range_selector' : (CATEGORICAL_SELECTORS[String(zone.mode ?? '').toLowerCase() || 'checklist'] ?? 'badge_dropdown_selector');
 	const columns = range ? [{ ...r, mapping: 'MIN' }, { ...r, mapping: 'MAX' }] : [{ ...r, mapping: 'ITEM' }];
-	const overrides = chartType === 'badge_dropdown_selector' && ['checkdropdown', ''].includes(String(zone.mode ?? '').toLowerCase()) ? { allow_multi_select: 'true' } : {};
+	const overrides = chartType === 'badge_dropdown_selector' && String(zone.mode ?? '').toLowerCase() === 'checkdropdown' ? { allow_multi_select: 'true' } : {};
 	const format = fieldColumnFormat(field);
 	if (format && target.binding) for (const c of columns) c.format = { ...format };
 	const key = `filter-${filterKeyScope(datasetKey, workbookKey)}${slugify(datasetKey)}-${slugify(target.name ?? label)}-${slugify(sheet ?? '')}-${selectorSlug(chartType)}`;

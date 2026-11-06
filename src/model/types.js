@@ -15,8 +15,9 @@
 // other panes' color pills (paneColors). 13: filter scope (filter-group, shared-view filters) and set filters that keep
 // the set's members (bare, memberLevel). 14: datasource hierarchies (drill paths). 15: worksheet window filter cards
 // (quickFilters). 16: table shading and row dividers (tableStyle). 17: fiscal year start month of datasources and date
-// fields (fiscalYearStart). Convert warns on an older ir.json.
-export const IR_VERSION = 17;
+// fields (fiscalYearStart). 18: worksheet window filter, parameter and legend cards (windowCards). Convert warns on an
+// older ir.json.
+export const IR_VERSION = 18;
 export const PLAN_VERSION = 1;
 
 /* ------------------------------------------------------------------ */
@@ -354,6 +355,7 @@ export const PLAN_VERSION = 1;
  * @property {Record<string, string>} [filterTitles]  Filter field (pill id) -> the title its quick filters show
  *                                              (quick-filter style-rule `title`)
  * @property {{ pillId: string, mode?: string }[]} [quickFilters]  The filter cards the worksheet's own window shows
+ * @property {{ kind: 'filter'|'paramctrl'|'legend', param: string, mode?: string, values?: string }[]} [windowCards]  Its window's filter, parameter and legend cards, in order
  *                                              (`<window class='worksheet'>` `<card type='filter'>`, IR 15), not its dashboards'
  * @property {{ rows?: boolean, cols?: boolean, subtotals?: string[], rowsOnTop?: boolean, colsOnLeft?: boolean }} [totals]  Grand totals
  *                                              (rows/cols@total), subtotaled pills, and Tableau's "totals to top" (rows@onTop)

@@ -481,20 +481,19 @@ test('a quick filter selection with the Null member is no default: Domo cannot k
 	assert.deepEqual(worksheetCards[0].body.definition.subscriptions.main.filters, [], 'and no fixed card filter either');
 });
 
-test('dropdown and radio modes pick the matching selector', () => {
+test('dropdown, radio and default list modes pick the matching selector', () => {
 	const region = cat('Region', ['East'], { all: true });
 	const s = sheet({ name: 'S', cols: CATEGORY, rows: SALES, filters: [region] });
 	for (const [mode, type] of [
 		['dropdown', 'badge_dropdown_selector'],
 		['checkdropdown', 'badge_dropdown_selector'],
 		['radiolist', 'badge_radio_selector'],
-		[undefined, 'badge_dropdown_selector']
+		[undefined, 'badge_checkbox_selector']
 	]) {
 		const dash = { name: 'D', size: { mode: 'automatic' }, zones: [zone('1', 'worksheet', { x: 0, y: 0, w: 1, h: 1 }, { worksheet: 'S' }), zone('2', 'filter', { x: 0, y: 0, w: 0.2, h: 0.1 }, { worksheet: 'S', param: region.pillId, mode })], floating: [] };
 		const [card] = plan({ worksheets: [s], dashboards: [dash] }).cards;
 		assert.equal(card.chartType, type, String(mode));
-		const multi = mode === 'checkdropdown' || mode === undefined;
-		assert.deepEqual(card.body.definition.charts.main.overrides, multi ? { allow_multi_select: 'true' } : {}, `${mode}: Tableau's multiple values dropdown`);
+		assert.deepEqual(card.body.definition.charts.main.overrides, mode === 'checkdropdown' ? { allow_multi_select: 'true' } : {}, `${mode}: Tableau's multiple values dropdown; no mode is its default multiple values list`);
 	}
 });
 
