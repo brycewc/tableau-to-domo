@@ -17,7 +17,7 @@ describe('field, calc and parameter references', () => {
 	});
 
 	test('nested boolean calc keeps its predicate when used as a condition', () => {
-		assert.equal(translateCalc('IF [Is Big] THEN "Y" END', baseCtx()).expression, "CASE WHEN (`Sales` > 1000) THEN 'Y' END");
+		assert.equal(translateCalc('IF [Is Big] THEN "Y" END', baseCtx()).expression, "CASE WHEN `Sales` > 1000 THEN 'Y' END");
 	});
 
 	test('cycle detection', () => {

@@ -89,31 +89,48 @@ function weekStart(em, c, index) {
 	return WEEKDAYS[String(em.ctx.weekStart ?? 'sunday').toLowerCase()] || 1;
 }
 
+/** A date without time; `DATE()` of it is the same value. */
+function dateOnly(r) {
+	r.dateOnly = true;
+	return r;
+}
+
+/** `base` (a first of month) plus `months`; month offsets of it add up exactly, so DATEADDs fold into one DATE_ADD. */
+function monthStart(em, base, offset) {
+	const months = offset?.value === 0 ? null : offset;
+	const sql = months ? `DATE_ADD(${base}, INTERVAL ${intervalValue(months)} MONTH)` : base;
+	const r = dateOnly(em.out(sql, 'date'));
+	r.monthStart = { base, months };
+	return r;
+}
+
+const quarterMonths = (dsql) => ({ sql: `(QUARTER(${dsql}) - 1) * 3`, prec: PREC.MUL });
+
 function dateTrunc(em, c, part, d, start) {
 	const dsql = d.sql;
 	switch (part) {
 		case 'year':
-			return em.out(yearStart(dsql), 'date');
+			return monthStart(em, yearStart(dsql), null);
 		case 'iso-year':
 			em.issue('warning', 'calc.iso-date', 'DATETRUNC iso-year approximated with the calendar year');
-			return em.out(yearStart(dsql), 'date');
+			return monthStart(em, yearStart(dsql), null);
 		case 'quarter':
-			return em.out(`DATE_ADD(${yearStart(dsql)}, INTERVAL ((QUARTER(${dsql}) - 1) * 3) MONTH)`, 'date');
+			return monthStart(em, yearStart(dsql), quarterMonths(dsql));
 		case 'iso-quarter':
 			em.issue('warning', 'calc.iso-date', 'DATETRUNC iso-quarter approximated with the calendar quarter');
-			return em.out(`DATE_ADD(${yearStart(dsql)}, INTERVAL ((QUARTER(${dsql}) - 1) * 3) MONTH)`, 'date');
+			return monthStart(em, yearStart(dsql), quarterMonths(dsql));
 		case 'month':
-			return em.out(`DATE_SUB(DATE(${dsql}), INTERVAL (DAYOFMONTH(${dsql}) - 1) DAY)`, 'date');
+			return monthStart(em, `DATE_SUB(DATE(${dsql}), INTERVAL (DAYOFMONTH(${dsql}) - 1) DAY)`, null);
 		case 'week':
 		case 'iso-week': {
 			const w = daysIntoWeek(dsql, part === 'iso-week' ? 2 : start);
-			return em.out(`DATE_SUB(DATE(${dsql}), INTERVAL ${w.prec >= PREC.PRIMARY ? w.sql : `(${w.sql})`} DAY)`, 'date');
+			return dateOnly(em.out(`DATE_SUB(DATE(${dsql}), INTERVAL ${w.prec >= PREC.PRIMARY ? w.sql : `(${w.sql})`} DAY)`, 'date'));
 		}
 		case 'day':
 		case 'dayofyear':
 		case 'weekday':
 		case 'iso-weekday':
-			return em.out(`DATE(${dsql})`, 'date');
+			return dateOnly(em.out(`DATE(${dsql})`, 'date'));
 		case 'hour':
 			return em.out(`DATE_ADD(DATE(${dsql}), INTERVAL HOUR(${dsql}) HOUR)`, 'datetime');
 		case 'minute':
@@ -141,10 +158,31 @@ const INTERVAL_UNITS = {
 	second: 'SECOND'
 };
 
+const MONTHS_PER = { year: 12, 'iso-year': 12, quarter: 3, 'iso-quarter': 3, month: 1 };
+
+/** Months `n` units of `part` span, as `{ sql, prec }`, folded for a constant `n`. */
+function monthsOf(n, part) {
+	const per = MONTHS_PER[part];
+	if (typeof n.constant?.value === 'number') return { sql: String(n.constant.value * per), prec: PREC.PRIMARY, value: n.constant.value * per };
+	return per === 1 ? n : { sql: `${wrap(n, PREC.MUL)} * ${per}`, prec: PREC.MUL };
+}
+
+function addMonths(months, more) {
+	if (!months) return more;
+	if (months.value !== undefined && more.value !== undefined) return { sql: String(months.value + more.value), prec: PREC.PRIMARY, value: months.value + more.value };
+	if (more.value === 0) return months;
+	if (more.value !== undefined) return { sql: `${wrap(months, PREC.ADD)} ${more.value < 0 ? '-' : '+'} ${Math.abs(more.value)}`, prec: PREC.ADD };
+	return { sql: `${wrap(months, PREC.ADD)} + ${wrap(more, PREC.ADD + 1)}`, prec: PREC.ADD };
+}
+
 function dateAdd(em, part, n, d) {
+	if (d.monthStart && MONTHS_PER[part] && n.type === 'integer') {
+		return monthStart(em, d.monthStart.base, addMonths(d.monthStart.months, monthsOf(n, part)));
+	}
 	// Domo's grammar intervalTypeBase has no YEAR unit (BeastModeParser.g4), so years become months.
 	if (part === 'year' || part === 'iso-year') {
-		return em.out(`DATE_ADD(${d.sql}, INTERVAL (${wrap(n, PREC.MUL)} * 12) MONTH)`, d.type === 'datetime' ? 'datetime' : 'date');
+		const r = em.out(`DATE_ADD(${d.sql}, INTERVAL (${wrap(n, PREC.MUL)} * 12) MONTH)`, d.type === 'datetime' ? 'datetime' : 'date');
+		return d.dateOnly ? dateOnly(r) : r;
 	}
 	const unit = INTERVAL_UNITS[part];
 	if (!unit) {
@@ -152,7 +190,8 @@ function dateAdd(em, part, n, d) {
 		return em.out(fn('DATEADD', quoteString(part), n.sql, d.sql), 'datetime');
 	}
 	const timeUnit = unit === 'HOUR' || unit === 'MINUTE' || unit === 'SECOND';
-	return em.out(`DATE_ADD(${d.sql}, INTERVAL ${intervalValue(n)} ${unit})`, timeUnit || d.type === 'datetime' ? 'datetime' : 'date');
+	const r = em.out(`DATE_ADD(${d.sql}, INTERVAL ${intervalValue(n)} ${unit})`, timeUnit || d.type === 'datetime' ? 'datetime' : 'date');
+	return d.dateOnly && !timeUnit ? dateOnly(r) : r;
 }
 
 /** Tableau DATEDIFF counts boundary crossings, unlike TIMESTAMPDIFF which counts whole elapsed units. */
@@ -531,11 +570,12 @@ export const FUNCTIONS = {
 	DATE(c, em) {
 		em.arity(c, 1, 1);
 		const x = em.arg(c, 0);
+		if (x.dateOnly) return { ...x };
 		if (isNumeric(x.type)) return em.out(`DATE_ADD('1899-12-30', INTERVAL FLOOR(${x.sql}) DAY)`, 'date');
 		if (x.type === 'string' && !(c.args[0].type === 'Literal' && /^\d{4}-\d{1,2}-\d{1,2}/.test(c.args[0].value))) {
 			em.issue('warning', 'calc.date-cast', 'DATE() of a string only parses ISO yyyy-mm-dd text in Domo; use DATEPARSE for other formats');
 		}
-		return em.out(`DATE(${x.sql})`, 'date');
+		return dateOnly(em.out(`DATE(${x.sql})`, 'date'));
 	},
 	DATETIME(c, em) {
 		em.arity(c, 1, 1);

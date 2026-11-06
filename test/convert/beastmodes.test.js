@@ -104,12 +104,12 @@ test('a set referenced by another calc is inlined as its membership test', () =>
 		{ id: '[Ranged]', name: 'Ranged', datatype: 'boolean', role: 'dimension', kind: 'set', set: { source: '[Customer]', members: ['Ann'], ranges: [{ from: 'C', to: 'E' }] } }
 	];
 	const inline = planBeastModes(ir(fields), [dataset], { workbookKey: 'wb' });
-	assert.equal(bm(inline, '[Calc]').expression, "CASE WHEN (`Customer` IS NOT NULL AND (`Customer` IN ('Ann', 'Bob'))) THEN `Sales` END");
-	assert.equal(bm(inline, '[Calc 2]').expression, "CASE WHEN (`Customer` IS NOT NULL AND (`Customer` IN ('Ann'))) THEN `Sales` END");
+	assert.equal(bm(inline, '[Calc]').expression, "CASE WHEN (`Customer` IS NOT NULL AND `Customer` IN ('Ann', 'Bob')) THEN `Sales` END");
+	assert.equal(bm(inline, '[Calc 2]').expression, "CASE WHEN (`Customer` IS NOT NULL AND `Customer` IN ('Ann')) THEN `Sales` END");
 	assert.equal(bm(inline, '[Top Customers]').expression, "CASE WHEN `Customer` IN ('Ann', 'Bob') THEN 'In' ELSE 'Out' END");
 	// A null value is Out of a set (In of an exclude set), never null.
-	assert.equal(bm(inline, '[Other]').expression, "CASE WHEN NOT (`Customer` IS NOT NULL AND (`Customer` IN ('Ann', 'Bob'))) THEN 'Other' END");
-	assert.equal(bm(inline, '[Flag]').expression, "CASE WHEN (NOT (`Customer` IS NOT NULL AND (`Customer` IN ('Ann')))) THEN 'true' ELSE 'false' END");
+	assert.equal(bm(inline, '[Other]').expression, "CASE WHEN NOT (`Customer` IS NOT NULL AND `Customer` IN ('Ann', 'Bob')) THEN 'Other' END");
+	assert.equal(bm(inline, '[Flag]').expression, "CASE WHEN NOT (`Customer` IS NOT NULL AND `Customer` IN ('Ann')) THEN 'true' ELSE 'false' END");
 	assert.equal(bm(inline, '[Ranged]').expression, "CASE WHEN `Customer` IS NOT NULL AND (`Customer` IN ('Ann') OR (LOWER(`Customer`) >= 'c' AND LOWER(`Customer`) <= 'e')) THEN 'In' ELSE 'Out' END");
 });
 
@@ -119,7 +119,7 @@ test('a set range on a binary-collation column compares case-sensitively, and it
 		{ id: '[Ranged]', name: 'Ranged', datatype: 'boolean', role: 'dimension', kind: 'set', set: { source: '[Customer]', ranges: [{ from: 'C', to: 'E' }] } }
 	];
 	const result = planBeastModes(ir(fields), [dataset], { workbookKey: 'wb' });
-	assert.equal(bm(result, '[Ranged]').expression, "CASE WHEN `Customer` IS NOT NULL AND ((`Customer` >= 'C' AND `Customer` <= 'E')) THEN 'In' ELSE 'Out' END");
+	assert.equal(bm(result, '[Ranged]').expression, "CASE WHEN `Customer` IS NOT NULL AND (`Customer` >= 'C' AND `Customer` <= 'E') THEN 'In' ELSE 'Out' END");
 	assert.equal(result.bindings.get(DS, '[Customer]').caseSensitive, true);
 	assert.equal(planBeastModes(ir(columns), [dataset], { workbookKey: 'wb' }).bindings.get(DS, '[Customer]').caseSensitive, undefined);
 });

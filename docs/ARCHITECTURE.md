@@ -294,6 +294,15 @@ grow; positional parameters may not change without updating every caller.
   - Date SQL puts every computed INTERVAL value in parentheses (`INTERVAL (DAYOFYEAR(d) - 1) DAY`): validateFunctions
     accepts arithmetic after INTERVAL but the query fails (ib:4201). Beast Mode MAKEDATETIME is
     `TIMESTAMP(CONCAT(DATE(d), ' ', TIME(t)))` (two-argument TIMESTAMP validates, then fails at query time).
+  - Parse time: icebox parses a Beast Mode with Domo's JSqlParser fork and answers PARSING_ERROR when that takes over
+    `icebox.parseSeconds` (60 s, `JsqlParseTimeoutException`). Its syntactic lookaheads re-scan a comparison's left
+    operand (IN, BETWEEN, IS NULL, LIKE, then the comparison), a parenthesized condition, a WHEN condition, and each
+    function's arguments, so cost multiplies per nesting level. Beast Mode SQL therefore puts a CASE or a long
+    (`HEAVY_OPERAND_CHARS`) operand on the right of a comparison (`0 <= <expr>`, `'true' = CASE ... END`), drops the
+    parentheses of a referenced or parenthesized comparison, writes `IF x = c THEN NULL ELSE x END` and
+    `IF x != c THEN x END` as `NULLIF(x, c)`, folds DATEADD by years, quarters or months of a year, quarter or month
+    start into one DATE_ADD, and drops `DATE()` around a date-only value (a truncation, or a DATE_ADD of one by days or
+    more).
   - Size guard: Domo rejects a formula over `MAX_EXPRESSION_BYTES` (4,194,304, and validateFunctions answers 400 for
     the whole batch), so a longer expression (UTF-8
     bytes) is `calc.expression-too-large` (unsupported, both dialects). A Beast Mode over `LARGE_EXPRESSION_BYTES`

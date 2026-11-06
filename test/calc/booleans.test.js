@@ -75,8 +75,8 @@ test('with variables, boolean parameters and nested boolean IFs become predicate
 	);
 	const filter = bms.RelativeStartDateFilter.expression;
 	assert.ok(filter.startsWith("CASE WHEN `RelativeStartDate` = 'All' THEN 'true' WHEN `RelativeStartDate` = 'Today' THEN CASE WHEN `Days Since Start` = 0 THEN 'true' WHEN `Days Since Start` != 0 THEN 'false' END"));
-	assert.ok(filter.includes("AND (CASE WHEN `Currentfp` = 1 THEN CASE WHEN (`Fiscal Period Num` = 12 AND `Fiscal Year Num` = `Currentfy` - 1) THEN 'true'"));
-	assert.ok(filter.includes("ELSE CASE WHEN `Fiscal Period Num` = `Currentfp` - 1 THEN 'true' WHEN `Fiscal Period Num` != `Currentfp` - 1 THEN 'false' END END = 'true')) THEN 'true'"));
+	assert.ok(filter.includes("AND 'true' = CASE WHEN `Currentfp` = 1 THEN CASE WHEN (`Fiscal Period Num` = 12 AND `Fiscal Year Num` = `Currentfy` - 1) THEN 'true'"));
+	assert.ok(filter.includes("ELSE CASE WHEN `Fiscal Period Num` = `Currentfp` - 1 THEN 'true' WHEN `Fiscal Period Num` != `Currentfp` - 1 THEN 'false' END END) THEN 'true'"));
 });
 
 const BOOL_CALCS = {
@@ -121,8 +121,8 @@ const SHAPES = [
 	['CASE [Is Returned] WHEN TRUE THEN [Sales] ELSE [Profit] END', "CASE WHEN LOWER(`Is Returned`) = 'true' THEN `Sales` ELSE `Profit` END"],
 	['CASE [Is Returned] WHEN FALSE THEN 1 WHEN TRUE THEN 2 END', "CASE WHEN NOT (LOWER(`Is Returned`) = 'true') THEN 1 WHEN LOWER(`Is Returned`) = 'true' THEN 2 END"],
 	["IF [Big] = FALSE AND NOT [Is Returned] THEN 'small' END", "CASE WHEN `Sales` <= 1000 AND NOT (LOWER(`Is Returned`) = 'true') THEN 'small' END"],
-	['IF [Big] THEN 1 END', 'CASE WHEN (`Sales` > 1000) THEN 1 END'],
-	['NOT [Big]', "CASE WHEN `Sales` <= 1000 THEN 'true' WHEN (`Sales` > 1000) THEN 'false' END"],
+	['IF [Big] THEN 1 END', 'CASE WHEN `Sales` > 1000 THEN 1 END'],
+	['NOT [Big]', "CASE WHEN `Sales` <= 1000 THEN 'true' WHEN `Sales` > 1000 THEN 'false' END"],
 	['[Sales] * [Dir]', '`Sales` * 1'],
 	[
 		'IF [Sales] > 0 THEN [Profit] = 0 ELSE [Profit] > 0 END',
@@ -130,7 +130,7 @@ const SHAPES = [
 	],
 	[
 		"[Region] = 'East' AND (IF [Sales] > 0 THEN [Profit] > 0 ELSE [Discount] > 0 END)",
-		"CASE WHEN `Region` = 'East' AND (CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END ELSE CASE WHEN `Discount` > 0 THEN 'true' WHEN `Discount` <= 0 THEN 'false' END END = 'true') THEN 'true' WHEN NOT (`Region` = 'East' AND (CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END ELSE CASE WHEN `Discount` > 0 THEN 'true' WHEN `Discount` <= 0 THEN 'false' END END = 'true')) THEN 'false' END"
+		"CASE WHEN `Region` = 'East' AND 'true' = CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END ELSE CASE WHEN `Discount` > 0 THEN 'true' WHEN `Discount` <= 0 THEN 'false' END END THEN 'true' WHEN NOT (`Region` = 'East' AND 'true' = CASE WHEN `Sales` > 0 THEN CASE WHEN `Profit` > 0 THEN 'true' WHEN `Profit` <= 0 THEN 'false' END ELSE CASE WHEN `Discount` > 0 THEN 'true' WHEN `Discount` <= 0 THEN 'false' END END) THEN 'false' END"
 	],
 	['IIF([Is Returned], [Sales] > 0, FALSE)', "CASE WHEN LOWER(`Is Returned`) = 'true' THEN CASE WHEN `Sales` > 0 THEN 'true' WHEN `Sales` <= 0 THEN 'false' END WHEN NOT (LOWER(`Is Returned`) = 'true') THEN 'false' END"],
 	['IFNULL([Is Returned], FALSE)', "IFNULL(CASE WHEN LOWER(`Is Returned`) = 'true' THEN 'true' WHEN NOT (LOWER(`Is Returned`) = 'true') THEN 'false' END, 'false')"],
@@ -159,8 +159,8 @@ test('a dead branch is not translated, so its problems are not reported', () => 
 	assert.equal(r.status, 'ok');
 });
 
-const BIG = "CASE WHEN (`Sales` > 1000) THEN 'true' WHEN `Sales` <= 1000 THEN 'false' END";
-const EAST = "CASE WHEN (`Region` = 'East') THEN 'true' WHEN `Region` != 'East' THEN 'false' END";
+const BIG = "CASE WHEN `Sales` > 1000 THEN 'true' WHEN `Sales` <= 1000 THEN 'false' END";
+const EAST = "CASE WHEN `Region` = 'East' THEN 'true' WHEN `Region` != 'East' THEN 'false' END";
 
 /** Comparisons at the top level of each aggregate, window or CAST argument; nested calls and CASE blocks are skipped. */
 function comparisonsInsideCalls(sql) {
@@ -202,7 +202,7 @@ const BOOLEAN_ARGUMENTS = [
 	['IF ISNULL([Parameters].[N]) THEN 1 ELSE 2 END', '2'],
 	['STR([Big])', BIG],
 	['STR(TRUE)', "'true'"],
-	['IF MIN([Big], [East]) THEN 1 END', `CASE WHEN CASE WHEN ${BIG} <= ${EAST} THEN ${BIG} WHEN ${BIG} IS NOT NULL AND ${EAST} IS NOT NULL THEN ${EAST} END = 'true' THEN 1 END`]
+	['IF MIN([Big], [East]) THEN 1 END', `CASE WHEN 'true' = CASE WHEN ${BIG} <= ${EAST} THEN ${BIG} WHEN ${BIG} IS NOT NULL AND ${EAST} IS NOT NULL THEN ${EAST} END THEN 1 END`]
 ];
 
 for (const [formula, expected] of BOOLEAN_ARGUMENTS) {

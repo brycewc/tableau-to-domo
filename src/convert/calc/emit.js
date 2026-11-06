@@ -185,7 +185,17 @@ export class Emitter {
 
 	/** A boolean whose natural form is a 'true'/'false' string expression. */
 	boolFromValue(valueSql) {
-		return { sql: `${valueSql} = 'true'`, type: 'boolean', prec: PREC.CMP, valueSql };
+		const sql = this.mode === 'beastmode' && this.heavyLeft(valueSql, "'true'") ? `'true' = ${valueSql}` : `${valueSql} = 'true'`;
+		return { sql, type: 'boolean', prec: PREC.CMP, valueSql };
+	}
+
+	/**
+	 * Beast Mode's parser re-scans a comparison's left operand for each condition form it tries, so a long one nested
+	 * a few levels deep exceeds its 60 s parse limit (PARSING_ERROR); mirrored, the long side is scanned far less.
+	 */
+	heavyLeft(left, right) {
+		if (this.mode !== 'beastmode') return /^CASE\b/i.test(left) && !/^CASE\b/i.test(right);
+		return (/^CASE\b/i.test(left) && !/^CASE\b/i.test(right)) || (left.length >= HEAVY_OPERAND_CHARS && left.length > right.length);
 	}
 
 	/** Value form of `r`: booleans become 'true'/'false' strings (calc.boolean-as-string), other values pass through. */
@@ -238,11 +248,25 @@ export class Emitter {
 			l = this.caseless(l);
 			r = this.caseless(r);
 		}
-		// Beast Mode's parser fails (PARSING_ERROR) on several WHEN conditions that each open with a long CASE.
-		if (/^CASE\b/i.test(l.sql) && !/^CASE\b/i.test(r.sql) && MIRRORED[op]) [l, r, op] = [r, l, MIRRORED[op]];
+		if (MIRRORED[op] && this.heavyLeft(l.sql, r.sql)) [l, r, op] = [r, l, MIRRORED[op]];
 		const [a, b] = [wrap(l, PREC.CMP + 1), wrap(r, PREC.CMP + 1)];
-		if (FLIPPED[op]) return this.predicate(`${a} ${op} ${b}`, `${a} ${FLIPPED[op]} ${b}`);
-		return this.out(`${a} ${op} ${b}`, 'boolean', PREC.CMP);
+		const p = FLIPPED[op] ? this.predicate(`${a} ${op} ${b}`, `${a} ${FLIPPED[op]} ${b}`) : this.out(`${a} ${op} ${b}`, 'boolean', PREC.CMP);
+		if (op === '=' || op === '!=') p.operands = { op, l, r };
+		return p;
+	}
+
+	/** `IF x = c THEN NULL ELSE x END` or `IF x != c THEN x END` (constant `c`) as `NULLIF(x, c)`: one copy of `x` to parse. */
+	nullIf(kept, last) {
+		if (this.mode !== 'beastmode' || kept.length !== 1) return undefined;
+		const { c, t } = kept[0];
+		const ops = c.operands;
+		if (!ops || isConst(c)) return undefined;
+		const isNullish = (x) => !x || (isConst(x) && x.constant.value === null);
+		const [kept1, other] = ops.op === '=' ? [last, t] : [t, last];
+		if (!kept1 || kept1.type === 'boolean' || !isNullish(other)) return undefined;
+		const [x, k] = isConst(ops.r) ? [ops.l, ops.r] : isConst(ops.l) ? [ops.r, ops.l] : [];
+		if (!x || isConst(x) || k.constant.value === null || x.sql !== kept1.sql) return undefined;
+		return this.out(fn('NULLIF', x.sql, k.sql), kept1.type, PREC.PRIMARY, ignoresCase(kept1) ? { ignoreCase: true } : undefined);
 	}
 
 	noteCaseOnly(a, b) {
@@ -275,6 +299,10 @@ export class Emitter {
 		}
 		const last = tail ? tail() : null;
 		if (!kept.length) return last ?? this.nullValue();
+		if (!subject) {
+			const folded = this.nullIf(kept, last);
+			if (folded) return folded;
+		}
 		const thens = [...kept.map((k) => k.t), ...(last ? [last] : [])];
 		const type = unifyTypes(thens.map((t) => t.type));
 		const value = (t) => this.valueOf(t).sql;
@@ -394,6 +422,7 @@ export class Emitter {
 				return this.emitLod(node);
 			case 'Paren': {
 				const inner = this.emit(node.expr);
+				if (this.unwrapsPredicate(inner)) return { ...inner };
 				return carry(this.out(`(${inner.sql})`, inner.type), inner);
 			}
 			default:
@@ -529,7 +558,13 @@ export class Emitter {
 			this.calcStack.pop();
 		}
 		const type = inner.type === 'unknown' || inner.type === 'null' ? fallbackType : inner.type;
+		if (this.unwrapsPredicate(inner)) return { ...inner };
 		return carry(this.out(inner.prec >= PREC.PRIMARY ? inner.sql : `(${inner.sql})`, type), inner);
+	}
+
+	/** A parenthesized comparison is slow for Beast Mode's parser to read; it is wrapped by precedence where used. */
+	unwrapsPredicate(inner) {
+		return this.mode === 'beastmode' && inner.type === 'boolean' && !isConst(inner) && inner.prec >= PREC.NOT;
 	}
 
 	emitCall(c) {
@@ -728,6 +763,7 @@ export class Emitter {
 
 const MIRRORED = { '=': '=', '!=': '!=', '<': '>', '>': '<', '<=': '>=', '>=': '<=' };
 const FLIPPED = { '<': '>=', '<=': '>', '>': '<=', '>=': '<', '=': '!=', '!=': '=' };
+const HEAVY_OPERAND_CHARS = 200;
 const LOD_SLOT_PASSTHROUGH = new Set(['Paren', 'Field', 'Lod']);
 const IN_VALUE_OPERAND_MAX = 200;
 const TRUE_TEXT = [...TRUE_VALUES].map(quoteString).join(', ');
@@ -741,6 +777,8 @@ function carry(r, from) {
 	if (from.valueSql) r.valueSql = from.valueSql;
 	if (from.notNull) r.notNull = from.notNull;
 	if (from.negated) Object.assign(r, { negated: from.negated, negatedPrec: from.negatedPrec });
+	if (from.dateOnly) r.dateOnly = true;
+	if (from.monthStart) r.monthStart = from.monthStart;
 	return r;
 }
 

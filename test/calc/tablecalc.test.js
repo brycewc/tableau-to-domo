@@ -419,7 +419,7 @@ describe('live workbook table calcs (usage ranking workbook)', () => {
 			"if (ZN(SUM([AU measure])) - LOOKUP(ZN(SUM([AU measure])), -1)) / ABS(LOOKUP(ZN(SUM([AU measure])), -1))>0 then 'up' else 'down' end";
 		const r = translateCalc(formula, ctx({ tableCalc: addressing }));
 		const lag = 'LAG(IFNULL(SUM(`AU measure`), 0), 1) OVER (PARTITION BY `ISEMPLOYEE` ORDER BY `Event Time` ASC, `Eventtime (Year)` ASC)';
-		assert.equal(r.expression, `CASE WHEN (IFNULL(SUM(\`AU measure\`), 0) - ${lag}) / NULLIF(ABS(${lag}), 0) > 0 THEN 'up' ELSE 'down' END`);
+		assert.equal(r.expression, `CASE WHEN 0 < (IFNULL(SUM(\`AU measure\`), 0) - ${lag}) / NULLIF(ABS(${lag}), 0) THEN 'up' ELSE 'down' END`);
 		assert.equal(r.status, 'ok');
 	});
 
