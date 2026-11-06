@@ -132,6 +132,10 @@ export const PLAN_VERSION = 1;
  * @property {string} [background]              table, worksheet or pane background-color
  * @property {string} [totalBackground]         Grand totals fill (data-class total, rows scope else unscoped)
  * @property {string} [subtotalBackground]      Subtotals fill (data-class subtotal, rows scope else unscoped)
+ * @property {string} [totalColor]              Grand totals text color (cell, pane or header rule, data-class total)
+ * @property {string} [subtotalColor]           Totals text color (data-class subtotal); Tableau also draws grand totals with it
+ * @property {string} [totalWeight]             Grand totals font weight (data-class total)
+ * @property {string} [subtotalWeight]          Totals font weight (data-class subtotal), also used by grand totals
  * @property {boolean} [rowDividers]            table-div (rows) line-visibility / stroke-size: false when turned off
  * @property {string} [rowDividerColor]         table-div (rows) stroke-color
  *

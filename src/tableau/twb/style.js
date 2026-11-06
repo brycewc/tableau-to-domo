@@ -147,6 +147,11 @@ export function tableStyle(style) {
 	if (total) out.totalBackground = total;
 	const subtotal = fill('subtotal');
 	if (subtotal) out.subtotalBackground = subtotal;
+	const text = (attr, dataClass) => find(['cell', 'pane', 'header'], attr, { scope: 'rows', dataClass }) ?? find(['cell', 'pane', 'header'], attr, { dataClass });
+	for (const [key, attr, dataClass] of [['totalColor', 'color', 'total'], ['subtotalColor', 'color', 'subtotal'], ['totalWeight', 'font-weight', 'total'], ['subtotalWeight', 'font-weight', 'subtotal']]) {
+		const value = text(attr, dataClass);
+		if (value) out[key] = value;
+	}
 	const visibility = find(['table-div'], 'line-visibility', { scope: 'rows' });
 	const stroke = px(find(['table-div'], 'stroke-size', { scope: 'rows' }));
 	if (visibility === 'off' || stroke === 0) out.rowDividers = false;

@@ -248,3 +248,13 @@ test('tableStyle reads row banding, totals and subtotals fill and row dividers, 
 	assert.deepEqual(ir.worksheets[0].tableStyle, { rowBandSize: 0, rowBandColor: '#eeeeee', totalBackground: '#00000000', subtotalBackground: '#d4d4d4', rowDividers: false });
 	assert.equal(buildWorkbookIR(workbook({ rows: `[${DS}].[none:Region:nk]` })).worksheets[0].tableStyle, undefined);
 });
+
+test('tableStyle reads totals and subtotals text color and weight from cell and header rules', () => {
+	const ir = buildWorkbookIR(
+		workbook({
+			table: `<style><style-rule element='cell'><format attr='color' data-class='subtotal' value='#ffffff' /></style-rule><style-rule element='header'><format attr='font-weight' data-class='subtotal' value='bold' /><format attr='background-color' data-class='total' value='#a6aeff' /></style-rule></style>`,
+			rows: `[${DS}].[none:Region:nk]`
+		})
+	);
+	assert.deepEqual(ir.worksheets[0].tableStyle, { totalBackground: '#a6aeff', subtotalColor: '#ffffff', subtotalWeight: 'bold' });
+});

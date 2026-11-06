@@ -15,6 +15,7 @@ import { isTableChart, planDrillPath } from './drill.js';
 import { domoNumberFormat, fieldColumnFormat, fieldNumberFormat, negativeStyle } from './number-format.js';
 import { hyperlinkFormula, nativeLinkFormat, parseUrlToken, pickLinkColumn, templateParts, urlActionSheets, withScheme } from './url-columns.js';
 import { NULL_VALUE, conditionAggregates, quoteString } from './calc/sql.js';
+import { opaqueHex } from './app-layout.js';
 
 /**
  * @typedef {import('../model/types.js').WorkbookIR} WorkbookIR
@@ -1336,6 +1337,26 @@ function crosstabTotals(builder) {
 	return overrides;
 }
 
+/** Tableau's totals fill and text colors on the totals turned on (TableCSR and PivotTableCSR `*_fill_color` / `*_font_color`). */
+export function totalsStyleOverrides(style, overrides) {
+	const out = {};
+	const totalColor = style.totalColor ?? style.subtotalColor;
+	const totalWeight = style.totalWeight ?? style.subtotalWeight;
+	const set = (on, prefix, attr, { fill, text, weight }) => {
+		if (overrides[on] !== 'true') return;
+		if (opaqueHex(fill)) out[`${prefix}_fill_color`] = opaqueHex(fill);
+		if (opaqueHex(text)) out[`${prefix}_font_color`] = opaqueHex(text);
+		if (weight) out[attr] = weight === 'bold' ? 'Bold' : 'Plain';
+	};
+	const total = { fill: style.totalBackground, text: totalColor, weight: totalWeight };
+	const subtotal = { fill: style.subtotalBackground, text: style.subtotalColor, weight: style.subtotalWeight };
+	set('total_row', 'total_row', 'attr_total_row', total);
+	set('total_col', 'total_col', 'attr_total_col', total);
+	set('subtotal_rows', 'subtotal_row', 'attr_subtotal_rows', subtotal);
+	set('subtotal_columns', 'subtotal_col', 'attr_subtotal_cols', subtotal);
+	return out;
+}
+
 /** Card formulas the subscription or a quick filter references (the crosstab drops the spread header's rank formula). */
 function usedFormulas(formulas, subscription, controls) {
 	const text = JSON.stringify([subscription, controls]);
@@ -1673,6 +1694,8 @@ export function planCard(ws, ir, bindings, { key, datasetKey, filterZones = new 
 		const columnSort = pivotHeaderSorts(builder, ws);
 		if (columnSort) overrides.column_sort = columnSort;
 	} else if (inference.family === 'crosstab') overrides = crosstabTotals(builder);
+	else if (inference.family === 'table' && ws.totals?.rows) Object.assign(overrides, crosstabTotals(builder));
+	Object.assign(overrides, totalsStyleOverrides({ ...ir.style?.table, ...ws.tableStyle }, overrides));
 	const negatives = negativeNumberOverrides(ws, { chartType, styles: [...builder.negativeStyles.values()] });
 	builder.issues.push(...negatives.issues);
 	Object.assign(overrides, negatives.overrides);

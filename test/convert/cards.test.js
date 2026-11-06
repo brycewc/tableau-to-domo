@@ -795,6 +795,22 @@ test('pivot grand totals and subtotals carry into the chart properties', () => {
 	assert.deepEqual([topOverrides.total_row_position, topOverrides.subtotal_rows_position, topOverrides.total_col], ['Before', 'Before', 'false'], "Tableau's totals to top");
 });
 
+test("a flat table's grand total row and Tableau's totals shading become Mega Table total row properties", () => {
+	const ws = sheet({ name: 'Listing', rows: `(${CATEGORY} / ${REGION})`, enc: { text: [SALES] } });
+	ws.totals = { rows: true, rowsOnTop: true };
+	ws.tableStyle = { totalBackground: '#a6aeff', subtotalColor: '#ffffff', subtotalWeight: 'bold' };
+	const [card] = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} }).cards;
+	assert.equal(card.chartType, 'badge_basic_table');
+	const o = card.body.definition.charts.main.overrides;
+	assert.deepEqual(
+		[o.total_row, o.total_row_label, o.total_row_position, o.total_row_suppress_count, o.total_row_fill_color, o.total_row_font_color, o.attr_total_row],
+		['true', 'Grand Total', 'Before', 'true', '#A6AEFF', '#FFFFFF', 'Bold']
+	);
+	assert.equal(o.subtotal_row_fill_color, undefined, 'subtotal colors only with subtotals shown');
+	const plain = sheet({ name: 'Plain', rows: `(${CATEGORY} / ${REGION})`, enc: { text: [SALES] } });
+	assert.equal(planCards(workbook({ worksheets: [plain] }), makeBindings(), { options: {} }).cards[0].body.definition.charts.main.overrides.total_row, undefined);
+});
+
 test('a crosstab listing records (four or more row headers) is a Mega Table with the inner column header spread into value columns', () => {
 	const SEGMENT = p('none', 'Segment');
 	const CUSTOMER = p('none', 'Customer');
