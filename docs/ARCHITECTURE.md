@@ -908,6 +908,10 @@ after each card.
   title's bold runs (`WorksheetIR.titleRuns`), `<Data Update Time>` is "Date last updated" smart text, the value of an
   `Owner ... : value` part an owner segment, other tokens are left out; smart text ids are uuidv5 of the card key. A card with
   smart text shows its description (`hideDescription: false`).
+- Published views (`withoutUnpublishedSheets`, `src/convert/published.js`): with `WorkbookInfo.views` listed, a dashboard or
+  story that is not a view and that no view opens (dashboard zones and buttons, story points, action targets, followed
+  transitively) is dropped, and a worksheet neither published nor reachable is hidden, so it gets no card and no place on
+  the "Worksheets" view (`convert.unpublished`, info). `convert --unpublished` keeps them.
 - Tableau links (`ConvertOptions.tableauLinks`, on by default, `convert --no-tableau-links` turns it off): the text card at the top of each
   dashboard view gets a last paragraph "Open in Tableau" linking to the dashboard on Tableau (`tableauViewUrl`: the site route of
   `WorkbookInfo.webpageUrl`, then `views/<view content url>` from `WorkbookInfo.views`, which extract lists; a dashboard Tableau

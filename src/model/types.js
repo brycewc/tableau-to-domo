@@ -859,6 +859,7 @@ export const PLAN_VERSION = 1;
  * @property {boolean} [tableauLinks=true]     A link to each dashboard's view on Tableau in the text card at the top of its
  *                                              page or view; a text card just for the link when it has none
  * @property {boolean} [allBeastModes]           Keep a Beast Mode for every translated calc, not only those migrated objects use
+ * @property {boolean} [unpublished]             Also migrate dashboards and sheets that are not views on Tableau and no view opens
  */
 
 /* ------------------------------------------------------------------ */

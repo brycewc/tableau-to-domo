@@ -5,7 +5,7 @@ import { CONVERT_OPTIONS, SELECT_OPTIONS, convertOptionsFrom, requireWorkbookArg
 
 export const name = 'convert';
 export const summary = 'Turn ir.json into a Domo plan (plan.json) and a migration report; no network';
-export const usage = 't2d convert --workbook <slug|name> [--no-fixed] [--no-window-functions] [--parameters inline|variables] [--joins dataflow|view|flatten] [--no-filter-cards] [--no-materialize] [--target app|pages] [--theme <name>] [--nav top|left] [--no-persist-filters] [--no-domo-nav] [--workbook-theme|--no-workbook-theme] [--no-tableau-links] [--prefix <text>] [--page-title <title>] [--dashboards <names>] [--worksheets <names>] [--datasources <names>] [--all-beast-modes] [--full]';
+export const usage = 't2d convert --workbook <slug|name> [--no-fixed] [--no-window-functions] [--parameters inline|variables] [--joins dataflow|view|flatten] [--no-filter-cards] [--no-materialize] [--target app|pages] [--theme <name>] [--nav top|left] [--no-persist-filters] [--no-domo-nav] [--workbook-theme|--no-workbook-theme] [--no-tableau-links] [--unpublished] [--prefix <text>] [--page-title <title>] [--dashboards <names>] [--worksheets <names>] [--datasources <names>] [--all-beast-modes] [--full]';
 export const options = {
 	workbook: { type: 'string', short: 'w', value: '<slug|name>', description: 'Extracted workbook' },
 	...CONVERT_OPTIONS,

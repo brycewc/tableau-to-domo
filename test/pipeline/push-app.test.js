@@ -347,6 +347,7 @@ test('a subset push keeps the other views and orders the navigation from state',
 	await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
 	const pruned = appPlan();
 	pruned.pages = pruned.pages.filter((pg) => pg.key === 'details').map((pg) => ({ ...pg, title: 'Details 2' }));
+	pruned.selection = { dashboards: ['Details'], worksheets: [], datasources: [] };
 	await ws.writeJson(p.plan, pruned);
 	calls.length = 0;
 	const summary = await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
@@ -566,6 +567,7 @@ test('alternating a subset push and a full push leaves an unchanged navigation a
 	await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
 	const subset = structuredClone(plan);
 	subset.pages = subset.pages.filter((pg) => pg.key === 'details');
+	subset.selection = { dashboards: ['Details'], worksheets: [], datasources: [] };
 	for (const next of [subset, plan, subset]) {
 		await ws.writeJson(p.plan, next);
 		calls.length = 0;
@@ -613,4 +615,28 @@ test('a re-push never moves, renames, shows, lays out or restyles a view t2d did
 	assert.ok(!names(calls).includes('setLanding'));
 	assert.match(summary.actions.find((a) => a.kind === 'app').notes.join(' '), /style overrides of the views were kept/);
 	assert.match(summary.actions.find((a) => a.kind === 'navigation').notes.join(' '), /kept the landing view 9000/);
+});
+
+test('a view that drops out of the plan is deleted on the next whole push, not on a dry run or a partial one', async () => {
+	const { ws, p, config } = await setup();
+	const { deps, calls } = stubAppDomo();
+	await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
+	const before = await loadState(ws, 'acme');
+	const detailsId = before.objects['page:details'].id;
+	const next = appPlan();
+	next.pages = next.pages.filter((pg) => pg.key !== 'details');
+	next.cards[0].pageKeys = ['dash'];
+	await ws.writeJson(p.plan, next);
+
+	const dry = await pushPlan({ config, slug: 'sales', deps, emitter: quiet, dryRun: true });
+	assert.deepEqual(dry.actions.filter((a) => a.kind === 'page' && a.action === 'delete').map((a) => [a.key, a.id, a.status]), [['details', detailsId, 'dry-run']]);
+	await pushPlan({ config, slug: 'sales', deps, emitter: quiet, only: 'cards' });
+	assert.ok(!calls.some((c) => c.name === 'deleteView'), 'a partial push leaves views alone');
+
+	const summary = await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
+	assert.equal(summary.ok, true, JSON.stringify(summary.actions.filter((a) => a.status !== 'ok')));
+	assert.deepEqual(calls.filter((c) => c.name === 'deleteView').map((c) => c.args.viewId), [detailsId]);
+	const after = await loadState(ws, 'acme');
+	assert.equal(after.objects['page:details'], undefined);
+	assert.equal(after.objects['layout:details'], undefined);
 });

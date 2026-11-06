@@ -73,6 +73,7 @@ export const CONVERT_OPTIONS = {
 	'no-domo-nav': { type: 'boolean', description: 'Hide Domo\'s own navigation beside a top app navigation' },
 	'workbook-theme': { type: 'boolean', description: 'Clone the theme with the workbook\'s fonts and colors (default on app create); given, push also applies it to an existing app' },
 	'no-workbook-theme': { type: 'boolean', description: 'Use the built-in theme unchanged' },
+	unpublished: { type: 'boolean', description: 'Also migrate dashboards and worksheets Tableau does not publish as views and no published view opens' },
 	'no-tableau-links': { type: 'boolean', description: 'Do not put a link to each dashboard on Tableau in the text card at the top of its view (by default a view with no text card gets one just for the link)' }
 };
 
@@ -165,6 +166,7 @@ export function convertOptionsFrom(values) {
 	else if (values['no-workbook-theme']) options.workbookTheme = false;
 	if (values['no-tableau-links']) options.tableauLinks = false;
 	if (values['all-beast-modes']) options.allBeastModes = true;
+	if (values.unpublished) options.unpublished = true;
 	return options;
 }
 

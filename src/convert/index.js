@@ -12,6 +12,7 @@ import { applyDrillInteractions } from './drill.js';
 import { dashboardFilterScopes } from './filters.js';
 import { planCrosstabStacks } from './stack.js';
 import { pageDefaultFilters, planPages, withoutHiddenZones } from './layout.js';
+import { withoutUnpublishedSheets } from './published.js';
 import { resolveParameterModes } from './variables.js';
 import { formatPlanSql } from './sql-format.js';
 import { hiddenScope } from './hidden-members.js';
@@ -32,7 +33,8 @@ export const DEFAULT_CONVERT_OPTIONS = Object.freeze({
 	target: 'app',
 	persistFilters: true,
 	domoNav: true,
-	tableauLinks: true
+	tableauLinks: true,
+	unpublished: false
 });
 
 /**
@@ -351,7 +353,8 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 	for (const i of outdated) log.warn(i.message, { code: i.code });
 
 	log.step('Planning datasets', { workbookKey });
-	const cased = applyMemberCase(withoutHiddenZones(ir), manifestIndex(manifests));
+	const published = resolved.unpublished ? { ir, issues: [] } : withoutUnpublishedSheets(ir);
+	const cased = applyMemberCase(withoutHiddenZones(published.ir), manifestIndex(manifests));
 	const datasetPlan = planDatasets(cased.ir, manifests, { mappings, options: resolved, workbookKey });
 	const blends = planBlends(cased.ir, datasetPlan, { options: resolved, workbookKey });
 	const planned = { ...datasetPlan, datasets: blends.datasets, dataflows: blends.dataflows };
@@ -392,6 +395,7 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 	const converted = (i) => (i.object?.type === 'action' && actionIds.has(i.object.id)) || (i.code === 'twb.story' && storyNames.has(i.object?.name));
 	const issues = [
 		...outdated,
+		...published.issues,
 		...(blends.ir.issues ?? []).filter((i) => !converted(i)),
 		...cased.issues,
 		...planned.issues,

@@ -1710,12 +1710,38 @@ async function pushPlanUnlocked({
 		}
 	}
 
+	/** Deletes the app views an earlier push created that the plan no longer has (their cards are retired with the cards). */
+	async function retireViews() {
+		const appId = appRef ? getEntry(state, appRef)?.id : undefined;
+		if (appId == null) return;
+		const planned = new Set((plan.pages ?? []).map((pg) => `page:${pg.key}`));
+		const stale = Object.entries(state.objects).filter(([ref, e]) => ref.startsWith('page:') && !planned.has(ref) && e.extra?.container === 'app' && String(e.extra.appId) === String(appId));
+		for (const [ref, entry] of stale) {
+			const key = ref.slice('page:'.length);
+			const base = { kind: 'page', key, name: entry.extra?.title ?? key };
+			const notes = ['no longer in the plan; the view an earlier push created is deleted, not its cards'];
+			try {
+				if (!dryRun) {
+					await d.apps.deleteView(c, appId, entry.id).catch((err) => {
+						if (err?.status !== 404) throw err;
+					});
+					for (const r of [ref, `layout:${key}`, `filterview:${key}`]) delete state.objects[r];
+					await checkpoint();
+				}
+				await record({ ...base, action: 'delete', id: entry.id, status: dryRun ? 'dry-run' : 'ok', notes });
+			} catch (err) {
+				await record({ ...base, action: 'delete', id: entry.id, status: 'failed', error: errorMessage(err), notes });
+			}
+		}
+	}
+
 	timer.phase(asApp ? 'views' : 'pages', kinds.has('pages'));
 	/* 5. Pages: workbook root, then one subpage per dashboard. Target 'app': the app's views. */
 	if (kinds.has('pages') && asApp) {
 		const views = (plan.pages ?? []).filter((pg) => writes('page', pg.key)).sort((a, b) => (a.navOrder ?? Infinity) - (b.navOrder ?? Infinity));
 		if (views.length) emitter.step('Views');
 		await pushViews(views);
+		if (wholePlan) await retireViews();
 	} else if (kinds.has('pages')) {
 		const pages = sortPages(plan.pages ?? []).filter((pg) => writes('page', pg.key));
 		if (pages.length) emitter.step('Pages');
