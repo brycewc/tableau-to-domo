@@ -121,7 +121,7 @@ test('growth levers: ignore-case session, VALUES table, UPDATE ... FROM an aggre
 	const r = ok(run(script, ['select * from DW.SF.tmp_sum', 'select r.Product, a.AccountId from DW.SF.tmp_rank r cross join DW.SF.tmp_acc a']));
 	const sql = of(r, 'SQL');
 	assert.ok(sql.some((s) => /^SELECT 'A' AS "COLUMN1"/.test(s.statements[0])), 'VALUES rows are a SQL tile');
-	assert.ok(sql.some((s) => /SUM\(DISTINCT "ORG_ID"\)/.test(s.statements[0])), 'SUM(DISTINCT) runs in a SQL tile');
+	assert.ok(sql.some((s) => /SUM\(DISTINCT "?ORG_ID"?\)/i.test(s.statements[0])), 'SUM(DISTINCT) runs in a SQL tile');
 	const update = of(r, 'ExpressionEvaluator').find((a) => a.name.startsWith('Update') || a.expressions.some((e) => /^CASE WHEN `_t2d_m\d+` IS NOT NULL THEN/.test(e.expression)));
 	assert.ok(update, 'UPDATE ... FROM overwrites matched rows');
 	assert.ok(of(r, 'Filter').some((f) => f.filterList[0].expression === '`Month` < `FIRST_ORDER`'), 'a non-equi join condition becomes a filter after the join');

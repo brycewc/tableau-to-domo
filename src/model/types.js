@@ -852,6 +852,8 @@ export const PLAN_VERSION = 1;
  * @property {boolean} [createFilterCards=true] Dashboard filter zones become filter cards
  * @property {boolean} [materialize=true]       Calcs Beast Mode cannot express (FIXED LODs used as dimensions, wrapped nested
  *                                              LODs, trig functions) become columns computed by a Magic ETL dataflow
+ * @property {boolean} [warehouseDataflows=true] Dataflows over one Cloud Amplifier integration run on its warehouse (ADR)
+ * @property {boolean} [combineDataflows=true]  All dataflows on one engine become one dataflow (combineDataflows)
  * @property {string} [namePrefix='']           Prefix for created Domo object names
  * @property {string} [pageTitle]               Root page or app title (default: namePrefix + workbook name)
  * @property {'app'|'pages'} [target='app']     App Studio app with one view per dashboard, or a root page with subpages

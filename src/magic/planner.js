@@ -1,7 +1,7 @@
 import { AGGREGATES, canonical, hasAggregate, hasWindow, parseQuery, parseScript, walkExpr } from './parser.js';
 import { MAGIC_FALSE, TranslateError, backtick, isCondition, magicType, notTrue, toMagic, toMagicValue } from './expr.js';
 import { Graph, formulaColumns } from './graph.js';
-import { itemName, sqlTileText } from './sql-tile.js';
+import { itemName, snowflakeQueryText, sqlTileText } from './sql-tile.js';
 import { excerpt } from './lexer.js';
 
 /**
@@ -58,6 +58,7 @@ export function planSql(script, opts = {}) {
 		resolver: typeof opts.inputs === 'function' ? opts.inputs : (t) => (opts.inputs ? opts.inputs[t.key] ?? opts.inputs[t.parts.at(-1)] : undefined),
 		mode: opts.mode ?? 'auto',
 		engine: opts.compute?.type === 'adr' ? 'adr' : 'magic',
+		sqlDialect: opts.compute?.type === 'adr' ? opts.compute.sqlTileDialect ?? 'SNOWFLAKE' : undefined,
 		statement: -1,
 		fallbacks: 0
 	};
@@ -111,7 +112,7 @@ export function planSql(script, opts = {}) {
 		if (!table) blockers.push({ statement: -1, output: name, excerpt: name, reason: `the script never creates ${name}` });
 		else outputs.push({ name, node: table.node });
 	}
-	if (env.fallbacks) issue('info', 'magic.sql-tile', `${env.fallbacks} query(ies) use a SQL tile because no tile chain expresses them.`);
+	if (env.fallbacks && env.mode === 'auto') issue('info', 'magic.sql-tile', `${env.fallbacks} query(ies) use a SQL tile because no tile chain expresses them.`);
 	return { graph, outputs, issues: env.issues, blockers, statements: summary, inputs: [...env.inputs.values()], tables: [...env.tables.keys(), ...env.poisoned] };
 }
 
@@ -1569,6 +1570,15 @@ function staticColumns(query, env, ctes = new Map()) {
 	}
 }
 
+function staticBody(body, env, scope) {
+	try {
+		return inferBody(body, env, scope);
+	} catch (err) {
+		if (err instanceof TranslateError) return null;
+		throw err;
+	}
+}
+
 function inferQuery(query, env, ctes) {
 	const scope = new Map(ctes);
 	for (const cte of query.with) scope.set(canonical(cte.name), { query: cte.query, scope: new Map(scope), columns: cte.columns });
@@ -1639,10 +1649,11 @@ function sqlTile(query, env, label, ctes = new Map()) {
 		return tileNameOf(node);
 	};
 	for (const parts of referencedTables(query, new Set(ctes.keys()))) nameFor(tableNode(parts, env));
-	const text = sqlTileText(query, { table: (parts) => nameFor(tableNode(parts, env)), variables: env.variables, engine: env.engine, issue: (i) => env.issue(i.severity, i.code, i.message) }, ctes);
+	const tileCtx = { table: (parts) => nameFor(tableNode(parts, env)), variables: env.variables, engine: env.engine, issue: (i) => env.issue(i.severity, i.code, i.message), columnsOf: (body, scope) => staticBody(body, env, scope) };
+	const text = env.sqlDialect === 'SNOWFLAKE' ? snowflakeQueryText(query, { ...tileCtx, native: true }, ctes) : sqlTileText(query, tileCtx, ctes);
 	const deps = [...inputs.values()];
 	// With no table the tile has no input; ADR runs a constant SELECT that way (live-checked).
-	const node = env.graph.add({ op: 'sql', sql: text, inputNames: deps.map((d) => d.tileName) }, deps, staticColumns(query, env, ctes), label);
+	const node = env.graph.add({ op: 'sql', sql: text, inputNames: deps.map((d) => d.tileName), ...(env.sqlDialect ? { dialect: env.sqlDialect } : {}) }, deps, staticColumns(query, env, ctes), label);
 	env.fallbacks++;
 	return { node, sources: [sourceFromNode(node, new Set())] };
 }
@@ -1654,15 +1665,21 @@ function tileNameOf(node) {
 
 /** Positional UNION ALL of nodes whose columns are unknown (Append Rows lines columns up by name, not position). */
 function unionAllTile(nodes, env, label) {
-	const sql = nodes.map((n) => `SELECT * FROM ${tileNameOf(n)}`).join(' UNION ALL ');
-	const node = env.graph.add({ op: 'sql', sql, inputNames: nodes.map(tileNameOf) }, nodes, nodes[0].columns, label);
+	const ref = (n) => (env.sqlDialect === 'SNOWFLAKE' ? `"${tileNameOf(n)}"` : tileNameOf(n));
+	const sql = nodes.map((n) => `SELECT * FROM ${ref(n)}`).join(' UNION ALL ');
+	const node = env.graph.add({ op: 'sql', sql, inputNames: nodes.map(tileNameOf), ...(env.sqlDialect ? { dialect: env.sqlDialect } : {}) }, nodes, nodes[0].columns, label);
 	env.fallbacks++;
 	return { node, sources: [sourceFromNode(node, new Set())] };
 }
 
-/** Plan a query as tiles, or as a SQL tile when tiles cannot express it (mode `auto`). */
+/** Plan a query as tiles with a SQL tile where tiles cannot (mode `auto`), or the other way round (mode `sql`). */
 function planOrFallback(query, env, label, ctes = new Map()) {
-	if (env.mode === 'sql') return sqlTile(query, env, label, ctes);
+	if (env.mode === 'sql') {
+		const tile = attempt(() => sqlTile(query, env, label, ctes), env, () => true);
+		if (tile.rel) return tile.rel;
+		env.issue('info', 'magic.tiles-reason', `A query uses tiles because the SQL tile cannot run it: it ${tile.error.message}.`);
+		return planQuery(query, env, ctes);
+	}
 	const result = attempt(() => planQuery(query, env, ctes), env);
 	if (result.rel) return result.rel;
 	env.issue('info', 'magic.sql-tile-reason', `A query uses a SQL tile: it ${result.error.message}.`);
@@ -1670,14 +1687,14 @@ function planOrFallback(query, env, label, ctes = new Map()) {
 }
 
 /** Run a planning step; when it fails in a way a SQL tile could handle, undo what it added and return the error. */
-function attempt(fn, env) {
+function attempt(fn, env, retry = (err) => err.fallback && env.mode !== 'tiles') {
 	const mark = env.graph.nodes.length;
 	const counter = env.graph.counter;
 	const issues = env.issues.length;
 	try {
 		return { rel: fn() };
 	} catch (err) {
-		if (!(err instanceof TranslateError) || !err.fallback || env.mode === 'tiles' || err.poisoned) throw err;
+		if (!(err instanceof TranslateError) || err.poisoned || !retry(err)) throw err;
 		const dropped = new Set(env.graph.nodes.slice(mark));
 		env.graph.nodes.length = mark;
 		env.graph.counter = counter;
@@ -1923,12 +1940,39 @@ function runAlter(st, env) {
 	}
 }
 
+const UPDATE_CAST = { STRING: 'VARCHAR', LONG: 'BIGINT', DOUBLE: 'DOUBLE', DATE: 'DATE', DATETIME: 'TIMESTAMP' };
+
+/** UPDATE without FROM as the SELECT that returns the updated table, columns in their order. */
+function updateQuery(st, known) {
+	const sets = new Map(st.sets.map((s) => [canonical(s.column), s.e]));
+	const items = known.map((c) => {
+		const col = { k: 'col', parts: [{ name: c.name, quoted: true }] };
+		const e = sets.get(c.name);
+		if (!e) return { e: col };
+		const cast = UPDATE_CAST[c.type] && !['col', 'null'].includes(e.k) && !(c.type === 'STRING' && e.k === 'str');
+		const value = cast ? { k: 'cast', e, type: { name: UPDATE_CAST[c.type], args: [] }, try: false } : e;
+		return { e: st.where ? { k: 'case', whens: [[st.where, value]], else: col } : value, alias: { name: c.name, quoted: true } };
+	});
+	const from = { k: 'table', parts: st.name, ...(st.alias ? { alias: st.alias } : {}) };
+	return { k: 'query', with: [], orderBy: [], body: { k: 'select', distinct: false, items, from } };
+}
+
 function runUpdate(st, env) {
 	const key = tableKey(st.name, env);
 	scriptTable(key, 'updates', env);
 	let rel = tableRel(st.name, st.alias, env);
 	const known = rel.node.columns;
 	for (const s of st.sets) if (known && !known.some((c) => c.name === canonical(s.column))) throw new TranslateError(`sets ${canonical(s.column)}, which ${key} does not have`);
+	// As a SQL tile the table keeps Snowflake's column order, which a later positional UNION relies on.
+	if (env.mode === 'sql' && known && !st.from) {
+		const tile = attempt(() => sqlTile(updateQuery(st, known), env, `Update ${displayName(st.name)}`), env, () => true);
+		if (tile.rel) {
+			tile.rel.node.columns = known.map((c) => ({ ...c }));
+			env.tables.set(key, { key, node: tile.rel.node });
+			return undefined;
+		}
+		env.issue('info', 'magic.tiles-reason', `An UPDATE uses tiles because the SQL tile cannot run it: it ${tile.error.message}.`);
+	}
 	const scope = { rel, replacements: new Map() };
 	let cond;
 	let matchMarker;

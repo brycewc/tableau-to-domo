@@ -1,3 +1,5 @@
+import { combineDataflows, moveDataflowsToWarehouse, useGraphEditor } from './combine-dataflows.js';
+import { warehouseSafeSorts } from './warehouse-sorts.js';
 import { IR_VERSION, PLAN_VERSION } from '../model/types.js';
 import { slugify } from '../util/ids.js';
 import { createEmitter, noopSink } from '../util/events.js';
@@ -456,6 +458,10 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 		const dropped = dropUnusedBeastModes(plan);
 		if (dropped) log.info(`${dropped} beast mode(s) left out: nothing migrated uses them`);
 	}
+	if (resolved.warehouseDataflows !== false) plan.issues.push(...moveDataflowsToWarehouse(plan));
+	if (resolved.combineDataflows !== false) plan.issues.push(...combineDataflows(plan, { workbookKey }));
+	useGraphEditor(plan);
+	plan.issues.push(...warehouseSafeSorts(plan));
 	formatPlanSql(plan);
 	log.done('Conversion planned', { datasets: plan.datasets.length, cards: plan.cards.length, pages: plan.pages.length, issues: issues.length });
 	return plan;

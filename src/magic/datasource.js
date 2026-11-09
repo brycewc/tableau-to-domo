@@ -20,7 +20,7 @@ import { sqlToMagic } from './index.js';
  *   Warehouse columns of a table, when known (browse the integration): more statements become tiles
  * @property {(t: { database: string, schema: string, name: string, key: string }) => any} [datasetRef]  dataSourceId for a table (default: `ca:<db.schema.name>`)
  * @property {string} [name]                                      Dataflow (and output name) prefix
- * @property {'auto'|'tiles'|'sql'} [mode]
+ * @property {'auto'|'tiles'|'sql'} [mode]                     Default `sql`: a SQL tile per query, tiles where the SQL tile cannot
  *
  * @typedef {Object} ConnectionDataflow
  * @property {string} connectionId
@@ -54,7 +54,7 @@ export function planInitialSqlDataflow(source, opts) {
 			tables.set(t.key, { ...located, dataSourceId });
 			return { dataSourceId, name, columns: opts.columns?.(located) };
 		};
-		const run = (outputs) => sqlToMagic(initialSqlOf(conn), { inputs, outputs, database: conn.dbname, schema: conn.schema, compute: { type: 'adr', cloudId: opts.cloudId }, mode: opts.mode, name: `${label} (Initial SQL)` });
+		const run = (outputs) => sqlToMagic(initialSqlOf(conn), { inputs, outputs, database: conn.dbname, schema: conn.schema, compute: { type: 'adr', cloudId: opts.cloudId }, mode: opts.mode ?? 'sql', name: `${label} (Initial SQL)` });
 		const first = run(custom);
 		const created = new Set(first.tables ?? []);
 		const relations = (source.tables ?? [])

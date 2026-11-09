@@ -992,6 +992,14 @@ export function buildSqlView({ name, description, sql, refs, aliasKeys, columns,
 	};
 }
 
+// Tables become "T2D_T<n>" so a dataflow on the warehouse can map them to its inputs.
+function warehouseSql(rel, aliasKeys) {
+	let sql = String(rel.sql ?? '');
+	for (const r of [...rel.refs].sort((a, b) => b.start - a.start)) sql = `${sql.slice(0, r.start)}"T2D_T${r.table + 1}"${sql.slice(r.end)}`;
+	const tables = Object.fromEntries([...new Set(rel.refs.map((r) => r.table))].map((t) => [`T2D_T${t + 1}`, ref('dataset', aliasKeys[t])]));
+	return { sql, tables };
+}
+
 /**
  * Inputs for a datasource served by Cloud Amplifier: one registered dataset per warehouse table, and a SQL
  * DataSet View per custom SQL relation. `early` holds registrations that only feed SQL views.
@@ -1115,6 +1123,7 @@ function planCloudAmplifierInputs(ds, manifest, { name, description, dsKey, tabl
 				strategy: 'view',
 				schema: columns.map((c, i) => ({ name: viewNames[i], type: c.type })),
 				view,
+				warehouseSql: warehouseSql(rel, aliasKeys),
 				datasourceId: ds.id,
 				cardTarget: false,
 				fieldMap: {}

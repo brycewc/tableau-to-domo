@@ -165,6 +165,9 @@ const AGG_SAME = new Set(['SUM', 'MIN', 'MAX', 'AVG', 'MEDIAN', 'STDDEV', 'STDDE
  * @param {ToMagicContext} ctx
  * @returns {string}
  */
+const COMPARISONS = new Set(['=', '<>', '!=', '<', '<=', '>', '>=']);
+const caseInsensitive = (n) => n?.k === 'fn' && String(n.name).toUpperCase() === 'COLLATE' && n.args?.[1]?.k === 'str' && /-ci\b|^ci\b/i.test(n.args[1].v);
+
 export function toMagic(node, ctx) {
 	const f = (n) => toMagic(n, ctx);
 	const sql = ctx.target === 'sql';
@@ -224,6 +227,7 @@ export function toMagic(node, ctx) {
 			if (node.op === '||') return `CONCAT(${concatArgs(node).map(f).join(', ')})`;
 			if (node.op === '%') return `MOD(${f(node.l)}, ${f(node.r)})`;
 			if (node.op === '<=>') return f({ k: 'isdistinct', l: node.l, r: node.r, not: true });
+			if (COMPARISONS.has(node.op) && (caseInsensitive(node.l) || caseInsensitive(node.r))) return `LOWER(${f(node.l)}) ${node.op} LOWER(${f(node.r)})`;
 			return `${f(node.l)} ${node.op} ${f(node.r)}`;
 		}
 		case 'cast':
@@ -341,6 +345,9 @@ function fnToMagic(node, ctx) {
 	}
 	if (node.distinct) throw new TranslateError(`calls ${name}(DISTINCT ...)`);
 	switch (name) {
+		case 'COLLATE':
+			requireArgs(node, 2);
+			return f(args[0]);
 		case 'NVL':
 		case 'IFNULL':
 			requireArgs(node, 2);
@@ -673,6 +680,18 @@ function windowToSql(node, ctx) {
 	return `${call} OVER (${windowSpecText(node.over, (e) => toMagic(e, ctx))})`;
 }
 
+const orderText = (items, f) => items.map((o) => `${f(o.e)}${o.desc ? ' DESC' : ''}${o.nulls ? ` NULLS ${o.nulls}` : ''}`).join(', ');
+
+/** A Snowflake call printed as written, for SQL that came from Snowflake and runs there again. */
+function nativeCall(node, f) {
+	const args = node.args.map((x) => (x.named ? `${x.named} => ${f(x)}` : f(x)));
+	const inner = node.star ? '*' : `${node.distinct ? 'DISTINCT ' : ''}${args.join(', ')}${node.argOrder ? ` ORDER BY ${orderText(node.argOrder, f)}` : ''}`;
+	let call = `${node.name}(${inner})${node.ignoreNulls ? ' IGNORE NULLS' : ''}`;
+	if (node.within) call += ` WITHIN GROUP (ORDER BY ${orderText(node.within, f)})`;
+	if (node.over) call += ` OVER (${windowSpecText(node.over, f)})`;
+	return call;
+}
+
 export function windowSpecText(spec, f) {
 	const parts = [];
 	if (spec.partition.length) parts.push(`PARTITION BY ${spec.partition.map(f).join(', ')}`);
@@ -728,6 +747,11 @@ export function toSnowflake(node, ctx = {}) {
 			return `${f(node.e)} IS ${node.not ? 'NOT ' : ''}NULL`;
 		case 'isdistinct':
 			return `${f(node.l)} IS ${node.not ? 'NOT ' : ''}DISTINCT FROM ${f(node.r)}`;
+		case 'var': {
+			const value = ctx.variables?.get(node.name.toUpperCase());
+			if (!value) throw new TranslateError(`reads the session variable $${node.name}, which the script never SETs`);
+			return f(value);
+		}
 		case 'isbool':
 			return `${f(node.e)} IS ${node.not ? 'NOT ' : ''}${node.v ? 'TRUE' : 'FALSE'}`;
 		case 'like':
@@ -771,6 +795,7 @@ function fnToSnowflake(node, ctx) {
 	const f = (n) => toSnowflake(n, ctx);
 	const a = node.args;
 	const name = node.name;
+	if (ctx.native) return nativeCall(node, f);
 	if (node.over) {
 		const call = `${name}(${node.star ? '*' : `${node.distinct ? 'DISTINCT ' : ''}${a.map(f).join(', ')}`})`;
 		return `${call} OVER (${windowSpecText(node.over, f)})`;

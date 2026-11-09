@@ -166,9 +166,10 @@ function tileSql(a, { cols, byId, opts }) {
 		case 'SQL': {
 			const statements = a.statements ?? [];
 			if (statements.length !== 1) throw new TranslateError('has a SQL tile with several statements');
-			const names = new Map((a.inputs ?? a.dependsOn ?? []).map((id) => [String(byId.get(id)?.name ?? id).toUpperCase(), quoteCte(id)]));
+			const names = new Map((a.inputs ?? a.dependsOn ?? []).map((id) => [String(byId.get(id)?.name ?? id).toUpperCase(), String(id)]));
 			const query = parseQuery(statements[0]);
 			const sql = snowflakeQueryText(query, {
+				native: a.settings?.sqlDialect === 'SNOWFLAKE',
 				table: (parts) => names.get(parts.map((p) => p.name).join('.').toUpperCase()) ?? names.get(parts.at(-1).name.toUpperCase())
 			});
 			return { sql, columns: null };

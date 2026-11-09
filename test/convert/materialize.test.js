@@ -500,7 +500,7 @@ test('a blend over a joined primary reads the columns the primary join dataflow 
 		{ datasourceId: DS, strategy: 'hyper', tables: [table('Orders', 'Orders_1', [{ name: 'Region', type: 'STRING', sourceName: 'Region' }, { name: 'Sales', type: 'DOUBLE', sourceName: 'Sales' }]), table('People', 'People_2', [{ name: 'Region', type: 'STRING', sourceName: 'Region' }, { name: 'Person', type: 'STRING', sourceName: 'Person' }])], issues: [] },
 		{ datasourceId: S, strategy: 'hyper', tables: [{ name: 'Targets', file: 'data/t.csv', rowCount: 2, flattened: true, columns: [{ name: 'Region', type: 'STRING' }, { name: 'Target', type: 'DOUBLE' }] }], issues: [] }
 	];
-	const plan = convertWorkbook(model, { manifests, options: { parameters: 'inline' } });
+	const plan = convertWorkbook(model, { manifests, options: { parameters: 'inline', combineDataflows: false } });
 	const blendCard = plan.cards.find((c) => c.worksheet === 'Blended');
 	const blendFlow = plan.dataflows.find((d) => d.key === blendCard.datasetKey);
 	assert.ok(!blendFlow.definition.actions.some((a) => a.id === 'group-first'), 'the blend does not compute First again');

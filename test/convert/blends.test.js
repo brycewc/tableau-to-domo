@@ -6,7 +6,7 @@ import { buildWorkbookIR } from '../../src/tableau/twb/index.js';
 import { formatSql } from '../../src/convert/sql-format.js';
 import { blendIr, blendManifests, P, S, pillIds } from './blend-fixture.js';
 
-const convert = (ir = blendIr()) => convertWorkbook(ir, { manifests: blendManifests(), options: { parameters: 'inline' } });
+const convert = (ir = blendIr()) => convertWorkbook(ir, { manifests: blendManifests(), options: { parameters: 'inline', combineDataflows: false } });
 const cardOf = (plan, ws) => plan.cards.find((c) => c.worksheet === ws);
 const flowOf = (plan, ws) => plan.dataflows.find((d) => d.key === cardOf(plan, ws).datasetKey);
 const actions = (flow, type) => flow.definition.actions.filter((a) => a.type === type);

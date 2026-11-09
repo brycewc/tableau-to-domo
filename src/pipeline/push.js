@@ -19,6 +19,7 @@ import { NAV_ICONS, appUrl, appViewIds, applyControlSpacing, applyItemStyles, ap
 import { instanceHost } from '../domo/client.js';
 import { notebookBody, sameOwner } from '../domo/notebooks.js';
 import { DEFAULT_FILTER_VIEW, sameFilters } from '../domo/pages.js';
+import { inputTriggerSettings } from '../domo/dataflows.js';
 import { copyCsvHead, csvLine } from '../tableau/data/csv-writer.js';
 import { renameSqlDatabases } from '../tableau/data/sql-refs.js';
 import { renderReport } from './report.js';
@@ -1012,13 +1013,16 @@ async function pushPlanUnlocked({
 			const outputEntry = (o) => (superseded.has(`dataset:${o.key}`) ? undefined : getEntry(state, `dataset:${o.key}`));
 			if (!dryRun) for (const r of [ref, ...outputs.map((o) => `dataset:${o.key}`)]) unretire(r);
 			try {
-				const def = resolve(df.definition);
+				const resolved = resolve(df.definition);
+				const triggerSettings = resolved.triggerSettings ?? inputTriggerSettings(resolved.actions);
+				const def = triggerSettings ? { ...resolved, triggerSettings } : resolved;
 				const hash = shortHash(def);
 				const outputMissing = !outputs.every((o) => outputEntry(o));
+				const triggersOnly = Boolean(entry) && !outputMissing && changed(entry, hash) && !changed(entry, shortHash(resolved));
 				const isChanged = changed(entry, hash) || (Boolean(entry) && outputMissing);
 				const action = entry ? (isChanged ? 'update' : 'unchanged') : 'create';
 				const inputsRefreshed = [...collectRefs(df.definition)].some((r) => refreshed.has(r));
-				const run = df.runAfterCreate !== false && (isChanged || inputsRefreshed || outputMissing);
+				const run = df.runAfterCreate !== false && ((isChanged && !triggersOnly) || inputsRefreshed || outputMissing);
 				if (dryRun) {
 					const id = entry?.id ?? placeholder(ref);
 					await record({ ...base, action, id, status: 'dry-run', notes: run ? ['run and wait'] : [] });

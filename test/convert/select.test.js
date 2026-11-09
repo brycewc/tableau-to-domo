@@ -6,7 +6,7 @@ import { superstorePlan } from './superstore-plan.js';
 
 after(async () => (await superstorePlan()).cleanup());
 
-test('one dashboard keeps its cards, filter card, the dataflow with its 3 inputs and only referenced beast modes', async () => {
+test('one dashboard keeps its cards, filter card, the combined dataflow with its 4 inputs and only referenced beast modes', async () => {
 	const { plan, ir } = await superstorePlan();
 	const sub = selectPlan(plan, { dashboards: ['executive overview'] }, { ir });
 	assert.deepEqual(sub.pages.map((p) => p.key).sort(), ['superstore', 'superstore--executive-overview']);
@@ -21,15 +21,14 @@ test('one dashboard keeps its cards, filter card, the dataflow with its 3 inputs
 	const target = sub.datasets.find((d) => d.strategy === 'dataflow-output');
 	assert.ok(target);
 	const inputs = sub.datasets.filter((d) => d.strategy === 'upload');
-	assert.equal(inputs.length, 3, 'the dataflow and its 3 input datasets');
-	assert.ok(!sub.datasets.some((d) => d.key === 'superstore.sales-targets-published'), 'unused datasource dropped');
+	assert.equal(inputs.length, 4, 'the combined dataflow and its 4 input datasets');
 	assert.deepEqual(sub.beastModes.map((b) => b.name), ['Profit Ratio', 'Running Sales']);
 	assert.equal(sub.selection.counts.before.beastModes, plan.beastModes.length);
 	assert.equal(sub.selection.counts.after.cards, sub.cards.length);
 	for (const card of sub.cards) assert.ok(card.pageKeys.every((k) => sub.pages.some((p) => p.key === k)));
 });
 
-test('an unplaced unsupported card of a kept dashboard stays in the plan so push can retire it; it keeps no dataset', async () => {
+test('an unplaced unsupported card of a kept dashboard stays in the plan so push can retire it; it keeps no dataset of its own', async () => {
 	const { plan, ir } = await superstorePlan();
 	const dash = ir.dashboards.find((d) => d.name.toLowerCase() === 'executive overview');
 	const sheet = dash.zones.find((z) => z.worksheet).worksheet;
@@ -38,7 +37,7 @@ test('an unplaced unsupported card of a kept dashboard stays in the plan so push
 	const sub = selectPlan({ ...plan, cards: [...plan.cards, label, other] }, { dashboards: ['executive overview'] }, { ir });
 	assert.ok(sub.cards.some((c) => c.key === 'superstore.label'));
 	assert.ok(!sub.cards.some((c) => c.key === 'superstore.other'));
-	assert.ok(!sub.datasets.some((d) => d.key === 'superstore.sales-targets-published'));
+	assert.ok(sub.dataflows.some((df) => collectRefs(df.definition).has('dataset:superstore.sales-targets-published')), 'kept only as an input of the combined dataflow');
 });
 
 test('a section worksheet of a merged crosstab stack keeps the merged card', async () => {

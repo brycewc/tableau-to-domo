@@ -79,10 +79,10 @@ test('extract writes the IR, CSVs and manifests for the packaged extract', async
 
 test('plan has datasets, a join dataflow, beast modes, cards and pages', () => {
 	assert.ok(plan.datasets.length >= 4);
-	assert.equal(plan.dataflows.length, 2);
-	const blend = plan.dataflows.find((d) => d.key.includes('.blend-'));
-	assert.ok(blend, 'the Sales vs Target blend becomes a join dataflow');
-	assert.equal(plan.cards.find((c) => c.worksheet === 'Sales vs Target').datasetKey, blend.outputDatasetKeys[0]);
+	assert.equal(plan.dataflows.length, 1, 'the joins and the blend run as one dataflow');
+	const blendKey = plan.cards.find((c) => c.worksheet === 'Sales vs Target').datasetKey;
+	assert.ok(blendKey.includes('.blend-'), 'the Sales vs Target blend becomes a join');
+	assert.ok(plan.dataflows[0].outputDatasetKeys.includes(blendKey));
 	const target = plan.datasets.find((d) => d.cardTarget && d.strategy === 'dataflow-output');
 	assert.ok(target, 'the related tables become a dataflow output card target');
 	assert.ok(Object.keys(target.fieldMap).length > 20);

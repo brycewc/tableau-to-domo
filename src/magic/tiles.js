@@ -242,7 +242,7 @@ function tile(n, base, dependsOn, { adr, zone }) {
 		case 'limit':
 			return { ...base, type: 'Limit', input, limit: n.limit, offset: n.offset };
 		case 'sql':
-			return { ...base, type: 'SQL', inputs: dependsOn, statements: [n.sql] };
+			return { ...base, type: 'SQL', inputs: dependsOn, ...(n.dialect ? { settings: { sqlDialect: n.dialect, preferredDatabaseEntityType: 'TEMP_VIEW' } } : {}), statements: [n.sql] };
 		default:
 			throw new Error(`Unknown tile node ${n.op}`);
 	}

@@ -38,18 +38,23 @@ export function itemName(item) {
  * @returns {string}
  */
 export function sqlTileText(query, ctx, ctes = new Map()) {
+	return printQuery(unwrapped(query), ctx, ctes);
+}
+
+function unwrapped(query) {
 	let q = query;
 	while (!q.with.length && !q.orderBy.length && !q.limit && !q.offset && q.body.k === 'nested') q = q.body.query;
-	return printQuery(q, ctx, ctes);
+	return q;
 }
 
 /**
- * The same query printed as Snowflake SQL (expressions through toSnowflake), for reading a SQL tile back.
+ * The same query printed as Snowflake SQL (expressions through toSnowflake): a SQL tile's text in the Snowflake dialect,
+ * and the way to read a SQL tile back.
  * @param {import('./parser.js').Query} query
  * @param {SqlTileContext} ctx
  */
-export function snowflakeQueryText(query, ctx) {
-	return printQuery(query, { ...ctx, snowflake: true }, new Map());
+export function snowflakeQueryText(query, ctx, ctes = new Map()) {
+	return printQuery(unwrapped(query), { ...ctx, snowflake: true }, ctes);
 }
 
 function printQuery(query, ctx, ctes) {
@@ -107,7 +112,9 @@ function exprPrinter(ctx, scope) {
 		if (outer) throw new TranslateError(`has a correlated subquery (it reads ${outer.parts.map((p) => p.name).join('.')}), which the SQL tile fails to run (live-checked)`);
 		return `(${printQuery(node.query, ctx, scope)})`;
 	};
-	if (ctx.snowflake) return (e) => toSnowflake(e, { column, subquery });
+	// Unquoted names stay unquoted, so Snowflake folds them as before and keywords such as DATEADD's date part still parse.
+	const native = (c) => c.parts.slice(-2).map((p) => (p.quoted ? quote(p.name) : p.name)).join('.');
+	if (ctx.snowflake) return (e) => toSnowflake(e, { column: ctx.native ? native : column, subquery, variables: ctx.variables, native: ctx.native });
 	const self = (e) =>
 		toMagic(e, {
 			target: 'sql',
@@ -126,10 +133,13 @@ function printBody(body, ctx, scope) {
 	switch (body.k) {
 		case 'nested':
 			return `(${printQuery(body.query, ctx, scope)})`;
-		case 'setop':
+		case 'setop': {
 			if (body.byName && !ctx.snowflake) throw new TranslateError(`uses ${body.op} BY NAME, which the SQL tile does not accept`);
 			if (body.op !== 'UNION' && !ctx.snowflake) throw new TranslateError(`uses ${body.op}, which the SQL tile runs as UNION (live-checked)`);
-			return `${printBody(body.l, ctx, scope)} ${body.op}${body.all ? ' ALL' : ''}${body.byName ? ' BY NAME' : ''} ${printBody(body.r, ctx, scope)}`;
+			const branchCtx = ctx.unionChain?.has(body) ? ctx : { ...ctx, ...unionRenames(body, ctx, scope) };
+			const side = (b) => branchCtx.unionRenames.get(b) ?? printBody(b, branchCtx, scope);
+			return `${side(body.l)} ${body.op}${body.all ? ' ALL' : ''}${body.byName ? ' BY NAME' : ''} ${side(body.r)}`;
+		}
 		case 'values':
 			return body.rows.map((row) => `SELECT ${row.map((v, k) => `${expr(v)} AS ${quote(`COLUMN${k + 1}`)}`).join(', ')}`).join(' UNION ALL ');
 		case 'select': {
@@ -166,6 +176,54 @@ function printBody(body, ctx, scope) {
 	}
 }
 
+// ADR fails a SQL tile whose UNION branches name their columns differently (live-checked), though Snowflake allows it.
+function unionRenames(body, ctx, scope) {
+	const out = new Map();
+	const chain = new Set();
+	const leaves = [];
+	const walk = (b) => (b.k === 'setop' ? (chain.add(b), walk(b.l), walk(b.r)) : leaves.push(b));
+	walk(body);
+	const result = { unionRenames: out, unionChain: chain };
+	if (ctx.snowflake || !ctx.columnsOf) return result;
+	const names = leaves.map((leaf) => {
+		const columns = ctx.columnsOf(leaf, scope);
+		return columns && printedNames(leaf, columns);
+	});
+	if (!names[0] || names.some((n) => n && n.length !== names[0].length)) return result;
+	leaves.forEach((leaf, i) => {
+		if (!names[i] || names[i].every((n, k) => n === names[0][k])) return;
+		if (!leaf.items.some((item) => item.e.k === 'star')) {
+			out.set(leaf, printBody({ ...leaf, items: leaf.items.map((item, k) => ({ ...item, alias: { name: names[0][k], quoted: true } })) }, ctx, scope));
+			return;
+		}
+		const items = names[i].map((n, k) => `${quote(n)} AS ${quote(names[0][k])}`);
+		out.set(leaf, `SELECT ${items.join(', ')} FROM (${printBody(leaf, ctx, scope)}) AS ${quote(`_t2d_union_${i + 1}`)}`);
+	});
+	return result;
+}
+
+/** The names printBody gives a branch's columns, or null when two would clash. */
+function printedNames(leaf, columns) {
+	if (leaf.k !== 'select' || leaf.items.filter((item) => item.e.k === 'star').length > 1) return null;
+	const taken = new Set();
+	const names = [];
+	let k = 0;
+	for (const item of leaf.items) {
+		if (item.e.k === 'star') {
+			const width = columns.length - (leaf.items.length - 1 - leaf.items.indexOf(item)) - k;
+			for (const c of columns.slice(k, k + width)) names.push(c.name);
+			k += width;
+			continue;
+		}
+		let name = itemName(item);
+		for (let n = 2; taken.has(name); n++) name = `${itemName(item)}_${n}`;
+		taken.add(name);
+		names.push(name);
+		k++;
+	}
+	return new Set(names).size === names.length ? names : null;
+}
+
 function printFrom(item, ctx, scope) {
 	const alias = (a, fallback) => (a ? ` AS ${quote(canonical(a))}` : fallback ? ` AS ${quote(fallback)}` : '');
 	switch (item.k) {
@@ -179,7 +237,7 @@ function printFrom(item, ctx, scope) {
 			}
 			const tile = ctx.table(item.parts);
 			if (!tile) throw new TranslateError(`reads ${item.parts.map((p) => p.name).join('.')}, which has no input tile`);
-			return `${tile}${alias(item.alias, canonical(item.parts.at(-1)))}`;
+			return `${ctx.snowflake ? quote(tile) : tile}${alias(item.alias, canonical(item.parts.at(-1)))}`;
 		}
 		case 'derived':
 			if (item.columns) throw new TranslateError('renames a derived table\'s columns, which the SQL tile cannot express');

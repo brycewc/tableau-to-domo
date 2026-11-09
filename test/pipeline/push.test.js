@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { overrideConfiguration, parseOnly, pushPlan, renameConnectorDatabases, resolveAccount, stripFormulaRefs } from '../../src/pipeline/push.js';
-import { loadState } from '../../src/pipeline/state.js';
+import { loadState, saveState } from '../../src/pipeline/state.js';
+import { shortHash } from '../../src/util/ids.js';
 import { openWorkspace } from '../../src/pipeline/workspace.js';
 import { ref } from '../../src/util/refs.js';
 import { samplePlan, stubDomo, tempDir, testConfig } from './helpers.js';
@@ -234,7 +235,9 @@ test('existing and dataflow-output datasets are recorded from mappings and dataf
 		waitForExecution: async () => ({ state: 'SUCCESS' })
 	};
 	const summary = await pushPlan({ config, slug: 'sales', deps });
-	assert.equal(calls.find((c) => c.name === 'createDataflow').args.actions[0].dataSourceId, 'existing-1');
+	const created = calls.find((c) => c.name === 'createDataflow').args;
+	assert.equal(created.actions[0].dataSourceId, 'existing-1');
+	assert.deepEqual(created.triggerSettings.triggers[0].triggerEvents, [{ type: 'DATASET_UPDATED', datasetId: 'existing-1', triggerOnDataChanged: true }]);
 	const state = await loadState(ws, 'acme');
 	assert.equal(state.objects['dataset:raw'].id, 'existing-1');
 	assert.equal(state.objects['dataset:orders'].id, 'out-1');
@@ -272,6 +275,41 @@ test('a dataflow with an output missing from state is sent again even when its d
 	await pushPlan({ config, slug: 'sales', deps });
 	assert.equal(calls.filter((c) => c.name === 'updateDataflow').length, 1);
 	assert.equal((await loadState(ws, 'acme')).objects['dataset:stacked'].id, 'out-2');
+});
+
+test('a dataflow pushed before input triggers gets them without a run', async () => {
+	const plan = samplePlan();
+	plan.datasets = [
+		{ key: 'raw', name: 'Raw', strategy: 'existing', existing: { datasetId: 'existing-1' }, schema: [], cardTarget: false, fieldMap: {} },
+		{ key: 'orders', name: 'Orders joined', strategy: 'dataflow-output', dataflowOutput: { dataflowKey: 'join', outputName: 'Orders joined' }, schema: [], cardTarget: true, fieldMap: {} }
+	];
+	const definition = { name: 'Join', actions: [{ type: 'LoadFromVault', dataSourceId: ref('dataset', 'raw') }] };
+	plan.dataflows = [{ key: 'join', name: 'Join', definition, outputDatasetKeys: ['orders'], runAfterCreate: true }];
+	plan.beastModes = [];
+	plan.cards = plan.cards.slice(0, 1);
+	const { ws, config } = await setup(plan);
+	const { deps, calls } = stubDomo();
+	const outputs = [{ dataSourceId: 'out-1', dataSourceName: 'Orders joined' }];
+	deps.dataflows = {
+		createDataflow: async () => ({ id: 42, outputs }),
+		updateDataflow: async (_c, id, def) => {
+			calls.push({ name: 'updateDataflow', args: def });
+			return { id, outputs };
+		},
+		runDataflow: async () => {
+			calls.push({ name: 'runDataflow' });
+			return { id: 7 };
+		},
+		waitForExecution: async () => ({ state: 'SUCCESS' })
+	};
+	await pushPlan({ config, slug: 'sales', deps });
+	const state = await loadState(ws, 'acme');
+	state.objects['dataflow:join'].hash = shortHash({ ...definition, actions: [{ type: 'LoadFromVault', dataSourceId: 'existing-1' }] });
+	await saveState(ws, state);
+	calls.length = 0;
+	await pushPlan({ config, slug: 'sales', deps });
+	assert.equal(calls.find((c) => c.name === 'updateDataflow').args.triggerSettings.triggers[0].title, 'Input DataSets updated');
+	assert.ok(!calls.some((c) => c.name === 'runDataflow'));
 });
 
 test('connector datasets need an account mapping', async () => {

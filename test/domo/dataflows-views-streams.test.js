@@ -1,7 +1,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mockFetch, jsonBody, testClient } from './helpers.js';
-import { createDataflow, updateDataflow, runDataflow, waitForExecution, outputDatasetIds, outputDatasets } from '../../src/domo/dataflows.js';
+import { createDataflow, inputTriggerSettings, updateDataflow, runDataflow, waitForExecution, outputDatasetIds, outputDatasets } from '../../src/domo/dataflows.js';
 import { createFusion, updateFusion, getFusion } from '../../src/domo/views.js';
 import { createConnectorStream, updateConnectorStream, runStream, waitForStreamExecution, toConfiguration } from '../../src/domo/streams.js';
 
@@ -302,4 +302,22 @@ test('updateConnectorStream replaces named METADATA entries and the account, kee
 		['CONNECTOR_RESULT', 'lastRun', 'x'],
 		['METADATA', 'query', 'select 1 limit 50']
 	]);
+});
+
+test('inputTriggerSettings fires on any input dataset; updateDataflow keeps triggers added in Domo', async () => {
+	assert.equal(inputTriggerSettings([{ type: 'PublishToVault' }]), undefined);
+	const settings = inputTriggerSettings([
+		{ type: 'LoadFromVault', dataSourceId: 'a' },
+		{ type: 'LoadFromVault', dataSourceId: 'b' },
+		{ type: 'LoadFromVault', dataSourceId: 'a' }
+	]);
+	assert.deepEqual(settings.triggers[0].triggerEvents.map((e) => e.datasetId), ['a', 'b']);
+	const { client } = testClient();
+	const custom = { triggers: [{ title: 'Nightly', triggerEvents: [{ type: 'SCHEDULE' }] }], zoneId: 'UTC', locale: 'en' };
+	mock = mockFetch([
+		{ method: 'GET', path: '/dataprocessing/v1/dataflows/77', json: { id: 77, triggerSettings: custom } },
+		{ method: 'PUT', path: '/dataprocessing/v1/dataflows/77', json: { id: 77 } }
+	]);
+	await updateDataflow(client, 77, { actions: [], triggerSettings: settings });
+	assert.deepEqual(jsonBody(mock.calls[1]).triggerSettings, custom);
 });

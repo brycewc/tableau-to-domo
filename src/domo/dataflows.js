@@ -4,6 +4,22 @@ const DATAFLOWS = '/dataprocessing/v1/dataflows';
 
 export const SUCCESS_STATES = new Set(['SUCCESS']);
 export const FAIL_STATES = new Set(['FAILED_DATA_FLOW', 'FAILED_UNKNOWN', 'FAILED_INDEXING', 'REJECTED', 'KILLED']);
+export const INPUT_TRIGGER_TITLE = 'Input DataSets updated';
+
+export function inputTriggerSettings(actions) {
+	const ids = [...new Set((actions ?? []).filter((a) => a.type === 'LoadFromVault' && a.dataSourceId).map((a) => String(a.dataSourceId)))];
+	if (!ids.length) return undefined;
+	return {
+		triggers: [{ title: INPUT_TRIGGER_TITLE, triggerEvents: ids.map((datasetId) => ({ type: 'DATASET_UPDATED', datasetId, triggerOnDataChanged: true })), triggerConditions: [] }],
+		zoneId: 'UTC',
+		locale: 'en_US'
+	};
+}
+
+function userTriggers(settings) {
+	const triggers = settings?.triggers ?? [];
+	return triggers.length > 0 && triggers.some((t) => t.title !== INPUT_TRIGGER_TITLE);
+}
 
 /**
  * Create a Magic ETL dataflow. Output datasets for PublishToVault actions with an
@@ -34,7 +50,8 @@ export async function getDataflow(c, id) {
  * Replace a dataflow definition (the endpoint wants the full object).
  * With `merge` (default) the current dataflow is read first, `def` is laid over it,
  * and PublishToVault actions without a guid reuse the existing output dataset
- * (matched by action id, then output name) so a re-push does not create new outputs.
+ * (matched by action id, then output name) so a re-push does not create new outputs. Triggers someone
+ * added in Domo are kept.
  *
  * @param {import('./client.js').DomoClient} c
  * @param {number|string} id
@@ -47,6 +64,7 @@ export async function updateDataflow(c, id, def, { merge = true } = {}) {
 		const current = await getDataflow(c, id);
 		// A run rejected after an update leaves the flow paused, and a paused flow answers a new run with a bare 400.
 		body = { ...current, paused: false, pausedReason: null, ...def, id: current?.id ?? id };
+		if (userTriggers(current?.triggerSettings)) body.triggerSettings = current.triggerSettings;
 		if (Array.isArray(def.actions)) body.actions = carryOutputGuids(def.actions, current?.actions || []);
 	}
 	return c.put(`${DATAFLOWS}/${encodeURIComponent(id)}`, body);

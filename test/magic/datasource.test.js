@@ -26,7 +26,18 @@ test('a datasource with procedural Initial SQL becomes one ADR dataflow over Clo
 	assert.ok(flow.outputs[0].actionId);
 	assert.deepEqual(flow.outputs[0].columns, [{ name: 'REGION', type: null }, { name: 'N', type: 'LONG' }]);
 	assert.equal(flow.result.actions.find((a) => a.type === 'LoadFromVault').dataSourceId.$ref, 'dataset:ca PROD_SHF_EDH.EDH_IDS.ORDERS');
-	assert.equal(flow.result.stats.sqlTiles, 0);
+	assert.equal(flow.result.stats.sqlTiles, 4);
+	assert.equal(flow.stages.length, 1);
+});
+
+test('a query the SQL tile cannot run becomes tiles', () => {
+	const script = 'create temp table tmp_b as with c (region, n) as (select region, 1 from orders) select region, n from c;';
+	const { dataflows, blocked } = planInitialSqlDataflow(source(script), { cloudId: 'c', columns: () => [{ name: 'REGION' }] });
+	assert.equal(blocked, undefined);
+	const { result } = dataflows[0];
+	assert.ok(result.issues.some((i) => i.code === 'magic.tiles-reason'));
+	assert.equal(result.stats.sqlTiles, 1);
+	assert.equal(planInitialSqlDataflow(source(SCRIPT), { cloudId: 'c', mode: 'auto' }).dataflows[0].result.stats.sqlTiles, 0);
 });
 
 test('a relation that reads a temp table is an output too; warehouse relations are not', () => {

@@ -407,7 +407,7 @@ test('VALUES and constant SELECTs become SQL tiles with no input', () => {
 	const tiles = of(r, 'SQL');
 	assert.equal(tiles.length, 2);
 	assert.equal(tiles[0].statements[0], `SELECT 1 AS "COLUMN1", 'x' AS "COLUMN2" UNION ALL SELECT 2 AS "COLUMN1", 'y' AS "COLUMN2"`);
-	assert.equal(tiles[1].statements[0], 'SELECT * FROM (SELECT 1 AS "N" UNION ALL SELECT 2 AS "2") AS "_t2d_d"');
+	assert.equal(tiles[1].statements[0], 'SELECT * FROM (SELECT 1 AS "N" UNION ALL SELECT 2 AS "N") AS "_t2d_d"');
 	assert.ok(tiles.every((t) => t.dependsOn === undefined && t.inputs.length === 0));
 	assert.ok(of(r, 'SelectValues').some((s) => s.fields.some((f) => f.name === 'COLUMN1' && f.rename === 'A')), 'VALUES columns line up with the table by position');
 	const alone = ok(run('CREATE TEMP TABLE p AS SELECT 1 AS n;', 'SELECT * FROM p'));
@@ -473,11 +473,17 @@ test('PIVOT becomes a Group By with conditional aggregates; UNPIVOT an Append of
 	assert.ok(of(u, 'Filter').every((f) => f.filterList[0].expression === '`VAL` IS NOT NULL'));
 });
 
-test('mode sql writes one SQL tile per query; procedural statements stay tiles', () => {
+test('mode sql writes one SQL tile per query and per UPDATE of a table with known columns', () => {
 	const r = ok(run("CREATE TEMP TABLE t AS SELECT id, status FROM orders WHERE amount > 1; UPDATE t SET status = 'x' WHERE id = 1;", 'SELECT status, COUNT(*) AS n FROM t GROUP BY status', { mode: 'sql' }));
-	assert.equal(of(r, 'SQL').length, 2);
+	assert.equal(of(r, 'SQL').length, 3);
+	assert.equal(of(r, 'ExpressionEvaluator').length, 0);
+	assert.match(of(r, 'SQL')[1].statements[0], /^SELECT "ID" AS "ID", CASE WHEN "ID" = 1 THEN 'x' ELSE "STATUS" END AS "STATUS" FROM t2d_T_\d+ AS "T"$/);
+	assert.match(of(r, 'SQL')[2].statements[0], /^SELECT "STATUS" AS "STATUS", COUNT\(\*\) AS "N" FROM t2d_Update_T_\d+ AS "T" GROUP BY "STATUS"$/);
+});
+
+test('mode sql keeps an UPDATE of a table with unknown columns as a Formula tile', () => {
+	const r = ok(run("CREATE TEMP TABLE t AS SELECT * FROM mystery; UPDATE t SET status = 'x' WHERE id = 1;", 'SELECT * FROM t', { mode: 'sql' }));
 	assert.match(one(r, 'ExpressionEvaluator').expressions[0].expression, /^CASE WHEN `ID` = 1/);
-	assert.match(of(r, 'SQL')[1].statements[0], /^SELECT "STATUS" AS "STATUS", COUNT\(\*\) AS "N" FROM t2d_Update_T_\d+ AS "T" GROUP BY "STATUS"$/);
 });
 
 test('SQL tile text uses the Domo dialect, not Snowflake functions', () => {
@@ -540,4 +546,10 @@ test('every action has a unique id and a gui position', () => {
 	assert.equal(new Set(ids).size, ids.length);
 	assert.ok(r.actions.every((a) => Number.isFinite(a.gui.x) && Number.isFinite(a.gui.y)));
 	assert.equal(of(r, 'PublishToVault').length, 2);
+});
+
+test('later UNION branches of a SQL tile take the first branch column names', () => {
+	const r = ok(run('CREATE TEMP TABLE t AS SELECT id, status FROM orders; CREATE TEMP TABLE u AS SELECT id AS k, region FROM orders;', 'SELECT * FROM (SELECT *, NULL AS extra FROM t UNION ALL SELECT k, region, 1 FROM u UNION ALL SELECT *, 2 FROM u) x', { mode: 'sql' }));
+	const text = of(r, 'SQL').at(-1).statements[0];
+	assert.match(text, /UNION ALL SELECT "K" AS "ID", "REGION" AS "STATUS", 1 AS "EXTRA" FROM t2d_U_\d+ AS "U" UNION ALL SELECT "K" AS "ID", "REGION" AS "STATUS", "2" AS "EXTRA" FROM \(SELECT \*, 2 AS "2" FROM t2d_U_\d+ AS "U"\) AS "_t2d_union_3"/);
 });
