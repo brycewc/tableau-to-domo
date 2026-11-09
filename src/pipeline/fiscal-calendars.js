@@ -1,5 +1,7 @@
 import { calendarConflicts, calendarNeeds, fiscalStartName, targetLabel } from '../convert/fiscal.js';
-import { getInstanceCalendarTable, getIntegrationFiscalCalendar, queryStandardCalendar } from '../domo/calendars.js';
+import { getInstanceCalendarTable, getIntegrationFiscalCalendar, queryStandardCalendar, registerIntegrationFiscalCalendar, validateIntegrationFiscalCalendar } from '../domo/calendars.js';
+import { fiscalCalendarDataflow } from '../magic/fiscal-calendar.js';
+import { getEntry, setEntry } from './state.js';
 
 /** @typedef {import('../model/types.js').Issue} Issue */
 
@@ -27,14 +29,64 @@ const setupText = (need) => `a month-boundary fiscal calendar whose year starts 
 function suggestionFor(need) {
 	const after = 'The cards are pushed with the fiscal calendar on and show the right periods once it exists.';
 	if (need.target === 'instance') return `In Domo company settings, set the Fiscal Calendar to ${setupText(need)}. ${after}`;
-	return `In Data Center, open the Cloud Amplifier integration, click the wrench > Set up calendar, and register ${setupText(need)}, with "Label fiscal year by end year" on. ${after}`;
+	return `In Data Center, open the Cloud Amplifier integration, click the wrench > Set up calendar, and register ${setupText(need)}, with "Label fiscal year by end year" on. ${after} On a writeable integration, push builds and registers it.`;
 }
 
 const cardIssues = (need, severity, code, message, suggestion) =>
 	need.cards.map((card) => ({ severity, code, message, object: { type: 'card', name: card.title, id: card.key }, ...(suggestion ? { suggestion } : {}) }));
 
-/** Read-only: t2d never registers or changes a calendar. @returns {Promise<Issue[]>} */
-export async function checkFiscalCalendars(c, needs, { instance = 'the instance', now = new Date() } = {}) {
+const sameTable = (a, b) => Boolean(a && b) && ['database', 'schema', 'table'].every((k) => String(a[k]).toUpperCase() === String(b[k]).toUpperCase());
+
+export const calendarRef = (integrationId) => `fiscalcalendar:${integrationId}`;
+
+/** For a writeable integration without a fiscal calendar. The state entry has no workbook stamp, so unpush keeps it.
+ * @param {{ state: import('../model/types.js').PushState, dataflows: typeof import('../domo/dataflows.js'), others?: { slug: string, needs: any[] }[], emitter?: any }} opts */
+export async function provisionFiscalCalendars(c, needs, { state, dataflows, others = [], emitter }) {
+	const issues = [];
+	const contested = new Set(calendarConflicts([...needs, ...others.flatMap((o) => o.needs)]).map((x) => x.need.target));
+	for (const need of needs.filter((n) => n.target !== 'instance' && !contested.has(n.target))) {
+		const id = need.source.integrationId;
+		const ref = calendarRef(id);
+		try {
+			const { name, calendar, writeback } = await getIntegrationFiscalCalendar(c, id);
+			if (calendar || !writeback) continue;
+			emitter?.progress(`Building the ${fiscalStartName(need.startMonth)} fiscal calendar for Cloud Amplifier integration "${name}"`, { ref });
+			const def = fiscalCalendarDataflow({ integrationId: id, integrationName: name, startMonth: need.startMonth });
+			const entry = getEntry(state, ref);
+			let dataflowId = entry?.id;
+			if (dataflowId == null) {
+				dataflowId = (await dataflows.createDataflow(c, def))?.id;
+				if (dataflowId == null) throw new Error('createDataflow returned no id');
+				setEntry(state, ref, { id: dataflowId, extra: { startMonth: need.startMonth } });
+			} else {
+				await dataflows.updateDataflow(c, dataflowId, def);
+				setEntry(state, ref, { extra: { startMonth: need.startMonth } });
+			}
+			const started = await dataflows.runDataflow(c, dataflowId);
+			await dataflows.waitForExecution(c, dataflowId, started?.id);
+			const datasetId = dataflows.outputDatasetIds(await dataflows.getDataflow(c, dataflowId))[0];
+			if (!datasetId) throw new Error(`dataflow ${dataflowId} has no output dataset`);
+			// ice names a writeback table after its dataset id (SchemaService.getSanitizedUniqueTableName).
+			const table = { ...writeback, table: datasetId.replace(/-/g, '_') };
+			const valid = await validateIntegrationFiscalCalendar(c, id, table);
+			if (!valid.success) throw new Error(`the table ${table.database}.${table.schema}.${table.table} it wrote is not a valid calendar: ${valid.message}`);
+			await registerIntegrationFiscalCalendar(c, id, table);
+			setEntry(state, ref, { extra: { startMonth: need.startMonth, datasetId, table } });
+			issues.push({
+				severity: 'info',
+				code: 'push.fiscal-calendar-created',
+				message: `Registered ${setupText(need)} on Cloud Amplifier integration "${name}" (${id}): ${table.database}.${table.schema}.${table.table}, written by dataflow ${dataflowId}`,
+				object: { type: 'dataflow', name: def.name, id: String(dataflowId) }
+			});
+		} catch (err) {
+			issues.push(...cardIssues(need, 'warning', 'push.fiscal-calendar-failed', `Could not build ${setupText(need)} on Cloud Amplifier integration ${id}: ${err.message}`, suggestionFor(need)));
+		}
+	}
+	return issues;
+}
+
+/** Reads only. A calendar t2d registered (`state`) is known to match. @returns {Promise<Issue[]>} */
+export async function checkFiscalCalendars(c, needs, { instance = 'the instance', now = new Date(), state } = {}) {
 	if (!needs.length) return [];
 	if (!c) {
 		return needs.flatMap((need) => cardIssues(need, 'warning', 'push.fiscal-calendar-unchecked', `These cards need ${setupText(need)} on ${targetLabel(need.target)}, which was not checked: no Domo credentials`, suggestionFor(need)));
@@ -62,9 +114,11 @@ export async function checkFiscalCalendars(c, needs, { instance = 'the instance'
 			const { name, calendar } = await getIntegrationFiscalCalendar(c, id);
 			const label = `Cloud Amplifier integration "${name}" (${id})`;
 			if (!calendar) {
-				issues.push(...cardIssues(need, 'warning', 'push.fiscal-calendar-missing', `These cards query ${label} live and need ${setupText(need)}, but the integration has no fiscal calendar registered`, suggestionFor(need)));
+				issues.push(...cardIssues(need, 'warning', 'push.fiscal-calendar-missing', `These cards query ${label} live and need ${setupText(need)}, but the integration has no fiscal calendar registered, so Domo refuses to render them`, suggestionFor(need)));
 				continue;
 			}
+			const own = state && getEntry(state, calendarRef(id))?.extra;
+			if (own?.startMonth === need.startMonth && sameTable(own.table, calendar)) continue;
 			const table = [calendar.database, calendar.schema, calendar.table].filter(Boolean).join('.');
 			issues.push(...cardIssues(need, 'warning', 'push.fiscal-calendar-unverified', `These cards query ${label} live and need ${setupText(need)}; the integration has the fiscal calendar ${table} registered, whose rows t2d cannot read, so its start month is not verified`, `Check that ${table} starts its fiscal year in ${fiscalStartName(need.startMonth)} and names it by the year it ends.`));
 		} catch (err) {

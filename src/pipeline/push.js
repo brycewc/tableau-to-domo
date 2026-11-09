@@ -23,7 +23,7 @@ import { inputTriggerSettings } from '../domo/dataflows.js';
 import { copyCsvHead, csvLine } from '../tableau/data/csv-writer.js';
 import { renameSqlDatabases } from '../tableau/data/sql-refs.js';
 import { renderReport } from './report.js';
-import { calendarNeeds, checkFiscalCalendars, otherWorkbookNeeds, workspaceCalendarConflicts } from './fiscal-calendars.js';
+import { calendarNeeds, checkFiscalCalendars, otherWorkbookNeeds, provisionFiscalCalendars, workspaceCalendarConflicts } from './fiscal-calendars.js';
 import { latestRunLogs, writeRunLog } from './runs.js';
 import { acquireStateLock, deleteEntry, getEntry, loadState, saveState, setEntry } from './state.js';
 import { openWorkspace } from './workspace.js';
@@ -533,8 +533,13 @@ async function pushPlanUnlocked({
 			reader = deps.client ?? (deps.createDomoClient ?? (await import('../domo/client.js')).createDomoClient)({ instance: config.domo.instance, accessToken: config.domo.accessToken }, { emitter: emitter.child('domo') });
 		}
 		emitter.step('Fiscal calendars');
-		preflightIssues.push(...(await checkFiscalCalendars(reader, calendars, { instance: config.domo?.instance || instance })));
-		preflightIssues.push(...workspaceCalendarConflicts(calendars, await otherWorkbookNeeds(ws, slug)));
+		const others = await otherWorkbookNeeds(ws, slug);
+		if (!dryRun && kinds.has('dataflows')) {
+			preflightIssues.push(...(await provisionFiscalCalendars(c, calendars, { state, dataflows: d.dataflows, others, emitter })));
+			await saveState(ws, state);
+		}
+		preflightIssues.push(...(await checkFiscalCalendars(reader, calendars, { instance: config.domo?.instance || instance, state })));
+		preflightIssues.push(...workspaceCalendarConflicts(calendars, others));
 	}
 
 	/** @type {PushSummary} */

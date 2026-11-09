@@ -795,17 +795,21 @@ pages or views, cards, layouts, then the app navigation and settings.
   a view with no text card gets one just for the link.
 - **Failure isolation**: a failed DataSet skips its Beast Modes and cards; everything else continues.
 - **Dry run**: `--dry-run` writes nothing, does not need a Domo token, and lists what would be created, updated or left
-  unchanged. Its only network calls are the read-only fiscal calendar checks below, when a token is set.
+  unchanged. Its only network calls are the read-only fiscal calendar checks below (a dry run builds no calendar), when a token is set.
 - **Fiscal years**: a Tableau datasource or date field whose fiscal year starts in another month than January (Data
   Source > Date Properties > Fiscal year start; a field's own setting wins, its "0" means the datasource's) keeps that
   fiscal year in Domo. Tableau names a fiscal year by the year it ends: with a December start, December 2025 is FY2026.
   Cards whose year, quarter, month or week grain or relative date filter is on such a field are created with Domo's
   fiscal calendar on; date parts t2d computes itself (Beast Modes such as the fiscal quarter) are shifted to the fiscal
-  year and need nothing. Push checks, read-only, that the calendar exists: for data stored in Domo, the company Fiscal
+  year and need nothing. Push checks that the calendar exists: for data stored in Domo, the company Fiscal
   Calendar setting; for data queried live through Cloud Amplifier, the integration's own calendar (wrench > Set up
   calendar). Each needs a month-boundary calendar starting in the Tableau start month with "Label fiscal year by end
-  year" on. t2d never sets either up: a missing or different one is a must-fix item listing the affected cards, which
-  push anyway and are right once the calendar is there. A Domo instance or integration holds one fiscal calendar, so
+  year" on. Domo refuses to render a fiscal card on an integration with no calendar, so when a writeable integration
+  has none (and no other workbook's cards want another start month there), push builds one: a Magic ETL dataflow
+  "t2d fiscal calendar (<Month> start)" writes the calendar into the warehouse, and push registers its output table as
+  the integration's fiscal calendar. Unpush keeps both, since every fiscal card on the integration then reads it. t2d
+  never changes the company setting or a registered calendar: a missing or different one is a must-fix item listing
+  the affected cards, which push anyway and are right once the calendar is there. A Domo instance or integration holds one fiscal calendar, so
   cards needing another start than most (across the workspace's workbooks) are must-fix too. Needs an `ir.json` from IR
   version 17 or later (run extract again).
 - **Selective**: `--only cards,layouts` pushes just those kinds and resolves the rest from state; see

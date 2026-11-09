@@ -285,8 +285,8 @@ grow; positional parameters may not change without updating every caller.
   - Beast Mode rejects many MySQL functions (ILLEGAL_FUNCTION), so they are rewritten: LOG to `LOG(10, x)`, EXP
     to `POWER(e, x)`, SIGN to a CASE, PI to a literal, DEGREES/RADIANS to arithmetic, DIV to `TRUNC(a / b)`,
     LTRIM/RTRIM and REGEXP_MATCH to REGEXP_REPLACE (`calc.regexp-match` when the pattern can match an empty
-    string), FIND with a start to INSTR on a SUBSTRING, SPACE to LPAD, MAKETIME to DATE_ADD. ASCII/CHAR fold for
-    literals only; trig functions and REGEXP_EXTRACT are `calc.no-equivalent` (`catalog.js` NO_EQUIVALENT).
+    string), FIND with a start to INSTR on a SUBSTRING, SPLIT and FINDNTH to SPLIT_PART (Snowflake rejects
+    SUBSTRING_INDEX), SPACE to LPAD, MAKETIME to DATE_ADD. ASCII/CHAR fold for literals only; trig functions and REGEXP_EXTRACT are `calc.no-equivalent` (`catalog.js` NO_EQUIVALENT).
   - Calc references are always inlined. Variables (parameters in `variables` mode, the default) are referenced as
     `DOMO_BEAST_MODE(<legacyId>)` (`variableReference`); push swaps in the template id (`bindVariables`). Domo does not
     resolve a backticked variable or beast mode name (validation `ILLEGAL_REFERENCE`); `DOMO_BEAST_MODE(<template id>)`
@@ -1614,13 +1614,23 @@ layout endpoints answer 400 `range=-*` without Accept-Language.)
   `appStudioStatus`. `data-app` off throws `PushError` `push.app-unavailable` (suggestion: convert with `--target pages`); there is
   no automatic fallback. `app-studio-persist` off is the warning `push.app-persist-off`; `app-studio-sections` off warns only when a
   layout has TABS. A flag lookup that fails is the warning `push.app-flags-unknown`. Fiscal calendars
-  (`pipeline/fiscal-calendars.js`, `domo/calendars.js`, read-only, also on a dry run when the Domo settings are there) are
+  (`pipeline/fiscal-calendars.js`, `domo/calendars.js`; the check is read-only and also runs on a dry run when the Domo settings are there) are
   checked for the cards being written. Instance: `GET /content/v1/customer-states/domo.calendar.tablename` (empty value: no
   custom fiscal calendar) and `POST /query/v1/execute/StandardCalendar` for the start month's first day of last year (must
   be QuarterOfYear 1, its own YearStart, Year + 1), the first day of the second quarter (QuarterOfYear 2) and the day
   before (QuarterOfYear 4, Year).
-  Integration: `GET /query/v1/byos/accounts/{id}` properties `fiscal_calendar_database|schema|name`; t2d never calls the calendar validate or register endpoints, and has no read-only way to read a
-  registered table's rows, so a registered one is `push.fiscal-calendar-unverified`. A missing or different calendar is
+  Integration: `GET /query/v1/byos/accounts/{id}` properties `fiscal_calendar_database|schema|name`. ice fails a fiscal
+  query on a Cloud Amplifier device with no registered calendar (`ib:4201`, `CalendarQueryService.requireFallbackOrFailFast`),
+  so on a real push that writes dataflows, `provisionFiscalCalendars` builds one for each integration that has none, is
+  `writeable` and is not contested (`calendarConflicts` over this and the other workbooks' needs): it creates or updates the
+  dataflow `magic/fiscal-calendar.js` `fiscalCalendarDataflow` (ADR on the integration, `useGraphUI`, one input-less
+  Snowflake SQL tile over `GENERATOR` giving the 25 columns of ice `CalendarRegistrationService.REQUIRED_COLUMNS` with the
+  values of icebox `MonthBoundaryCalendarGenerator`, 1990 through 2074), runs it, then `POST .../calendar/validate` and
+  `POST .../calendar/register` (`calendarType: FISCAL`) with the output table `<database>.<defaultSchema>.<dataset id with
+  underscores>`. State `fiscalcalendar:<integrationId>` (`id` = dataflow, `extra: { startMonth, datasetId, table }`, no
+  workbook stamp, so unpush never removes it); a failure is `push.fiscal-calendar-failed` per card, success the info
+  `push.fiscal-calendar-created`. The check then accepts a registered table matching that entry; any other registered
+  table is `push.fiscal-calendar-unverified`, since t2d cannot read its rows. A missing or different calendar is
   the must-fix `push.fiscal-calendar-missing` / `push.fiscal-calendar-wrong` on each card, with the setup in the
   suggestion (company settings Fiscal Calendar, or the integration's wrench > Set up calendar: month-boundary, start
   month, "Label fiscal year by end year" on); a read that fails is `push.fiscal-calendar-unchecked`. The cards push with

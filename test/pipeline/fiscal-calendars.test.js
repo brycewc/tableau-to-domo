@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { checkFiscalCalendars, matchesInstanceCalendar, probeDates, workspaceCalendarConflicts } from '../../src/pipeline/fiscal-calendars.js';
+import { checkFiscalCalendars, matchesInstanceCalendar, probeDates, provisionFiscalCalendars, workspaceCalendarConflicts } from '../../src/pipeline/fiscal-calendars.js';
 import { pushPlan } from '../../src/pipeline/push.js';
 import { openWorkspace } from '../../src/pipeline/workspace.js';
 import { samplePlan, tempDir, testConfig } from './helpers.js';
@@ -79,6 +79,76 @@ test('an integration without a registered fiscal calendar is must-fix; a registe
 	const registered = await checkFiscalCalendars(fakeClient({ integration: props }), [need('integration:int-1')], { now: NOW });
 	assert.equal(registered[0].code, 'push.fiscal-calendar-unverified');
 	assert.match(registered[0].message, /DB\.S\.DIM_CALENDAR registered/);
+});
+
+const WRITEABLE = { writeable: true, database: 'DOMO_DB', defaultSchema: 'WRITEBACK_SCHEMA' };
+
+/** A writeable integration: the calendar dataflow, its run and the registration are recorded. */
+function provisioningClient({ raw = WRITEABLE, valid = true } = {}) {
+	const calls = [];
+	const registered = [];
+	const c = {
+		calls,
+		registered,
+		get: async (path) => {
+			calls.push(`GET ${path}`);
+			const id = /^\/query\/v1\/byos\/accounts\/([^/]+)$/.exec(path)?.[1];
+			if (id) return { id, friendlyName: 'Acme', properties: {}, ...raw };
+			throw new Error(`unexpected GET ${path}`);
+		},
+		post: async (path, body) => {
+			calls.push(`POST ${path}`);
+			if (path.endsWith('/calendar/validate')) return valid ? { success: true, message: 'ok' } : { success: false, message: 'Missing required column' };
+			if (path.endsWith('/calendar/register')) return registered.push(body), { success: true };
+			throw new Error(`unexpected POST ${path}`);
+		}
+	};
+	const dataflows = {
+		created: [],
+		createDataflow: async (_c, def) => (dataflows.created.push(def), { id: 77 }),
+		updateDataflow: async () => ({}),
+		runDataflow: async () => ({ id: 5 }),
+		waitForExecution: async () => ({ state: 'SUCCESS' }),
+		getDataflow: async () => ({ outputs: [{ dataSourceId: 'aaaa-bbbb' }] }),
+		outputDatasetIds: (df) => df.outputs.map((o) => o.dataSourceId)
+	};
+	return { c, dataflows };
+}
+
+test('a writeable integration without a fiscal calendar gets one built and registered, which the check then accepts', async () => {
+	const { c, dataflows } = provisioningClient();
+	const state = { instance: 'acme', objects: {} };
+	const issues = await provisionFiscalCalendars(c, [need('integration:int-1')], { state, dataflows });
+	assert.deepEqual(issues.map((i) => i.code), ['push.fiscal-calendar-created']);
+	assert.equal(dataflows.created[0].computeCloud, 'int-1');
+	const table = { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'aaaa_bbbb' };
+	assert.deepEqual(c.registered, [{ ...table, calendarType: 'FISCAL' }]);
+	assert.deepEqual(state.objects['fiscalcalendar:int-1'].extra, { startMonth: 12, datasetId: 'aaaa-bbbb', table });
+	assert.equal(state.objects['fiscalcalendar:int-1'].extra.workbooks, undefined, 'no workbook stamp, so unpush keeps it');
+	const props = { fiscal_calendar_database: 'DOMO_DB', fiscal_calendar_schema: 'WRITEBACK_SCHEMA', fiscal_calendar_name: 'AAAA_BBBB' };
+	assert.deepEqual(await checkFiscalCalendars(fakeClient({ integration: props }), [need('integration:int-1')], { now: NOW, state }), []);
+	const otherStart = await checkFiscalCalendars(fakeClient({ integration: props }), [need('integration:int-1', 7)], { now: NOW, state });
+	assert.equal(otherStart[0].code, 'push.fiscal-calendar-unverified');
+});
+
+test('no calendar is built where one is registered, the integration is read-only, or cards compete for it', async () => {
+	const registered = provisioningClient({ raw: { ...WRITEABLE, properties: { fiscal_calendar_name: 'CAL' } } });
+	assert.deepEqual(await provisionFiscalCalendars(registered.c, [need('integration:int-1')], { state: { objects: {} }, dataflows: registered.dataflows }), []);
+	const readOnly = provisioningClient({ raw: { writeable: false } });
+	assert.deepEqual(await provisionFiscalCalendars(readOnly.c, [need('integration:int-1')], { state: { objects: {} }, dataflows: readOnly.dataflows }), []);
+	const contested = provisioningClient();
+	const others = [{ slug: 'other', needs: [need('integration:int-1', 7), need('integration:int-1', 7)] }];
+	assert.deepEqual(await provisionFiscalCalendars(contested.c, [need('integration:int-1')], { state: { objects: {} }, dataflows: contested.dataflows, others }), []);
+	assert.deepEqual(await provisionFiscalCalendars(contested.c, [need('instance')], { state: { objects: {} }, dataflows: contested.dataflows }), [], 'the company calendar is never changed');
+	for (const { dataflows } of [registered, readOnly, contested]) assert.equal(dataflows.created.length, 0);
+});
+
+test('a calendar table that fails validation is not registered and is reported per card', async () => {
+	const { c, dataflows } = provisioningClient({ valid: false });
+	const issues = await provisionFiscalCalendars(c, [need('integration:int-1')], { state: { objects: {} }, dataflows });
+	assert.deepEqual(issues.map((i) => i.code), ['push.fiscal-calendar-failed', 'push.fiscal-calendar-failed']);
+	assert.match(issues[0].message, /not a valid calendar: Missing required column/);
+	assert.deepEqual(c.registered, []);
 });
 
 test('without credentials the calendars are reported unchecked', async () => {
