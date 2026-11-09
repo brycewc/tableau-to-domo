@@ -318,6 +318,15 @@ function stringPredicate(side, test) {
 /** Number of occurrences of `t` in `s`. */
 const occurrences = (s, t) => `(LENGTH(${s}) - LENGTH(REPLACE(${s}, ${t}, ''))) / LENGTH(${t})`;
 
+/** {@link occurrences} as an integer: Snowflake reads a SPLIT_PART part number computed with `/` as no part. */
+function wholeOccurrences(s, t, literal) {
+	const removed = `LENGTH(${s}) - LENGTH(REPLACE(${s}, ${t}, ''))`;
+	return typeof literal === 'string' && [...literal].length === 1 ? removed : `FLOOR(${occurrences(s, t)})`;
+}
+
+/** Most occurrences FINDNTH expands into SPLIT_PART lengths; past it the expression grows without bound. */
+const MAX_FINDNTH_LITERAL = 20;
+
 const PI = String(Math.PI);
 
 /** True when a literal pattern can match the empty string; unparseable patterns count as true. */
@@ -454,10 +463,18 @@ export const FUNCTIONS = {
 	FINDNTH(c, em) {
 		em.arity(c, 3, 3);
 		const [s, t, n] = em.args(c);
-		return em.out(
-			`CASE WHEN ${occurrences(s.sql, t.sql)} >= ${wrap(n, PREC.CMP + 1)} THEN LENGTH(SUBSTRING_INDEX(${s.sql}, ${t.sql}, ${n.sql})) + 1 ELSE 0 END`,
-			'integer'
-		);
+		const count = em.lit(c, 2);
+		const guard = `CASE WHEN ${occurrences(s.sql, t.sql)} >= ${wrap(n, PREC.CMP + 1)} THEN`;
+		// SUBSTRING_INDEX fails on Snowflake (Cloud Amplifier); SPLIT_PART runs on every Domo engine.
+		if (typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= MAX_FINDNTH_LITERAL) {
+			if (count === 1) return em.out(fn('INSTR', s.sql, t.sql), 'integer');
+			const parts = Array.from({ length: count }, (_, i) => `LENGTH(${fn('SPLIT_PART', s.sql, t.sql, String(i + 1))})`);
+			const literal = em.lit(c, 1);
+			const delimiters = typeof literal === 'string' ? String((count - 1) * [...literal].length + 1) : `${count === 2 ? '' : `${count - 1} * `}LENGTH(${t.sql}) + 1`;
+			return em.out(`${guard} ${parts.join(' + ')} + ${delimiters} ELSE 0 END`, 'integer');
+		}
+		em.issue('warning', 'calc.findnth-occurrence', 'FINDNTH with a computed occurrence uses SUBSTRING_INDEX, which a Snowflake (Cloud Amplifier) dataset rejects');
+		return em.out(`${guard} LENGTH(SUBSTRING_INDEX(${s.sql}, ${t.sql}, ${n.sql})) + 1 ELSE 0 END`, 'integer');
 	},
 	SPLIT(c, em) {
 		em.arity(c, 3, 3);
@@ -467,11 +484,14 @@ export const FUNCTIONS = {
 			em.issue('error', 'calc.split-token', 'SPLIT needs a non-zero integer literal token number');
 			return em.out(fn('SPLIT', s.sql, d.sql, em.arg(c, 2).sql), 'string');
 		}
-		const inner = n > 0 ? `SUBSTRING_INDEX(SUBSTRING_INDEX(${s.sql}, ${d.sql}, ${n}), ${d.sql}, -1)` : `SUBSTRING_INDEX(SUBSTRING_INDEX(${s.sql}, ${d.sql}, ${n}), ${d.sql}, 1)`;
-		const needed = Math.abs(n) - 1;
-		if (needed === 0) return em.out(inner, 'string');
-		// Tableau returns '' for a missing token; SUBSTRING_INDEX would repeat the last one.
-		return em.out(`CASE WHEN ${occurrences(s.sql, d.sql)} >= ${needed} THEN ${inner} ELSE '' END`, 'string');
+		// SPLIT_PART, not SUBSTRING_INDEX (Snowflake rejects it), returns '' for a missing token like Tableau.
+		if (n > 0) return em.out(fn('SPLIT_PART', s.sql, d.sql, String(n)), 'string');
+		// Domo's engine rejects a part number below 1, so count from the start; the guard keeps it at 1 or more.
+		const offset = n + 2;
+		const part = `${wholeOccurrences(s.sql, d.sql, em.lit(c, 1))}${offset > 0 ? ` + ${offset}` : offset < 0 ? ` - ${-offset}` : ''}`;
+		const inner = fn('SPLIT_PART', s.sql, d.sql, part);
+		if (n === -1) return em.out(inner, 'string');
+		return em.out(`CASE WHEN ${occurrences(s.sql, d.sql)} >= ${-n - 1} THEN ${inner} ELSE '' END`, 'string');
 	},
 	REGEXP_MATCH(c, em) {
 		em.arity(c, 2, 2);
