@@ -904,6 +904,8 @@ export const PLAN_VERSION = 1;
  *   that replaces it for Cloud Amplifier, for a warehouse that shares the same data under other objects
  * @property {Record<string,'export'|'none'>} [unmapped]  Datasource caption or luid -> what to do when no mapping covers it:
  *   'export' a snapshot (hyper, published-extract, vds, view-csv) or 'none' (no data). Without it, extract asks.
+ * @property {Record<string, { table: string, startMonth: number, columns: { date: string, fiscalYear: string, fiscalQuarter: string, fiscalPeriod: string, weekStart?: string }, from?: string }>} [fiscalCalendars]
+ *   Cloud Amplifier integration id -> the warehouse calendar table its fiscal calendar is built from (instead of generated)
  */
 
 export {};

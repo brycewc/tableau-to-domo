@@ -87,11 +87,15 @@ const WRITEABLE = { writeable: true, database: 'DOMO_DB', defaultSchema: 'WRITEB
 function provisioningClient({ raw = WRITEABLE, valid = true } = {}) {
 	const calls = [];
 	const registered = [];
+	const tables = new Map();
 	const c = {
 		calls,
 		registered,
+		tables,
 		get: async (path) => {
 			calls.push(`GET ${path}`);
+			const mapped = /\/datasets\/([^/]+)\/mapping$/.exec(path)?.[1];
+			if (mapped) return { database: 'DOMO_DB', schemaName: 'WRITEBACK_SCHEMA', tableName: tables.get(mapped) ?? mapped.replace(/-/g, '_') };
 			const id = /^\/query\/v1\/byos\/accounts\/([^/]+)$/.exec(path)?.[1];
 			if (id) return { id, friendlyName: 'Acme', properties: {}, ...raw };
 			throw new Error(`unexpected GET ${path}`);
@@ -101,6 +105,13 @@ function provisioningClient({ raw = WRITEABLE, valid = true } = {}) {
 			if (path.endsWith('/calendar/validate')) return valid ? { success: true, message: 'ok' } : { success: false, message: 'Missing required column' };
 			if (path.endsWith('/calendar/register')) return registered.push(body), { success: true };
 			throw new Error(`unexpected POST ${path}`);
+		},
+		put: async (path, body) => {
+			calls.push(`PUT ${path}`);
+			if (path.endsWith('/calendar/update')) return registered.push({ ...body, updated: true }), { success: true };
+			const mapped = /\/datasets\/([^/]+)\/mapping$/.exec(path)?.[1];
+			if (mapped) return tables.set(mapped, body.mapping.tableName), body.mapping;
+			throw new Error(`unexpected PUT ${path}`);
 		}
 	};
 	const dataflows = {
@@ -121,11 +132,13 @@ test('a writeable integration without a fiscal calendar gets one built and regis
 	const issues = await provisionFiscalCalendars(c, [need('integration:int-1')], { state, dataflows });
 	assert.deepEqual(issues.map((i) => i.code), ['push.fiscal-calendar-created']);
 	assert.equal(dataflows.created[0].computeCloud, 'int-1');
-	const table = { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'aaaa_bbbb' };
+	assert.deepEqual(dataflows.created[0].actions.find((x) => x.type === 'PublishToVault').dataSource.schemaMapping, { database: 'DOMO_DB', schemaName: 'WRITEBACK_SCHEMA', tableName: 'FISCAL_CALENDAR_DECEMBER_START' });
+	const table = { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'FISCAL_CALENDAR_DECEMBER_START' };
 	assert.deepEqual(c.registered, [{ ...table, calendarType: 'FISCAL' }]);
+	assert.equal(c.tables.get('aaaa-bbbb'), 'FISCAL_CALENDAR_DECEMBER_START');
 	assert.deepEqual(state.objects['fiscalcalendar:int-1'].extra, { startMonth: 12, datasetId: 'aaaa-bbbb', table });
 	assert.equal(state.objects['fiscalcalendar:int-1'].extra.workbooks, undefined, 'no workbook stamp, so unpush keeps it');
-	const props = { fiscal_calendar_database: 'DOMO_DB', fiscal_calendar_schema: 'WRITEBACK_SCHEMA', fiscal_calendar_name: 'AAAA_BBBB' };
+	const props = { fiscal_calendar_database: 'DOMO_DB', fiscal_calendar_schema: 'WRITEBACK_SCHEMA', fiscal_calendar_name: 'FISCAL_CALENDAR_DECEMBER_START' };
 	assert.deepEqual(await checkFiscalCalendars(fakeClient({ integration: props }), [need('integration:int-1')], { now: NOW, state }), []);
 	const otherStart = await checkFiscalCalendars(fakeClient({ integration: props }), [need('integration:int-1', 7)], { now: NOW, state });
 	assert.equal(otherStart[0].code, 'push.fiscal-calendar-unverified');
@@ -141,6 +154,18 @@ test('no calendar is built where one is registered, the integration is read-only
 	assert.deepEqual(await provisionFiscalCalendars(contested.c, [need('integration:int-1')], { state: { objects: {} }, dataflows: contested.dataflows, others }), []);
 	assert.deepEqual(await provisionFiscalCalendars(contested.c, [need('instance')], { state: { objects: {} }, dataflows: contested.dataflows }), [], 'the company calendar is never changed');
 	for (const { dataflows } of [registered, readOnly, contested]) assert.equal(dataflows.created.length, 0);
+});
+
+test('the calendar t2d registered under its dataset id is renamed and registered under the new name', async () => {
+	const props = { fiscal_calendar_database: 'DOMO_DB', fiscal_calendar_schema: 'WRITEBACK_SCHEMA', fiscal_calendar_name: 'aaaa_bbbb' };
+	const { c, dataflows } = provisioningClient({ raw: { ...WRITEABLE, properties: props } });
+	const state = { objects: { 'fiscalcalendar:int-1': { id: 77, extra: { startMonth: 12, datasetId: 'aaaa-bbbb', table: { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'aaaa_bbbb' } } } } };
+	const issues = await provisionFiscalCalendars(c, [need('integration:int-1')], { state, dataflows });
+	assert.deepEqual(issues.map((i) => i.code), ['push.fiscal-calendar-renamed']);
+	const table = { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'FISCAL_CALENDAR_DECEMBER_START' };
+	assert.deepEqual(c.registered, [{ ...table, calendarType: 'FISCAL', updated: true }]);
+	assert.deepEqual(state.objects['fiscalcalendar:int-1'].extra.table, table);
+	assert.equal(dataflows.created.length, 0, 'not rebuilt');
 });
 
 test('a calendar table that fails validation is not registered and is reported per card', async () => {
@@ -180,4 +205,25 @@ test('dry run checks the fiscal calendars read-only and still plans every card',
 	assert.deepEqual(fiscal.map((i) => [i.code, i.object.id]), [['push.fiscal-calendar-missing', plan.cards[0].key]]);
 	assert.ok(summary.actions.some((a) => a.kind === 'card' && a.key === plan.cards[0].key && a.status === 'dry-run'));
 	assert.deepEqual(client.calls, ['GET /content/v1/customer-states/domo.calendar.tablename', 'POST /query/v1/execute/StandardCalendar']);
+});
+
+test('a mapped warehouse calendar replaces the generated one t2d registered, and is not rebuilt on the next push', async () => {
+	const source = { table: 'DB.SCH.DIM_CALENDAR', startMonth: 12, columns: { date: 'CALENDAR_DATE', fiscalYear: 'FISCAL_YEAR_NUM', fiscalQuarter: 'FISCAL_QUARTER_NUM', fiscalPeriod: 'FISCAL_PERIOD_NUM', weekStart: 'WEEK_START_DATE' }, from: '1989-01-01' };
+	const table = { database: 'DOMO_DB', schema: 'WRITEBACK_SCHEMA', table: 'aaaa_bbbb' };
+	const props = { fiscal_calendar_database: 'DOMO_DB', fiscal_calendar_schema: 'WRITEBACK_SCHEMA', fiscal_calendar_name: 'aaaa_bbbb' };
+	const { c, dataflows } = provisioningClient({ raw: { ...WRITEABLE, properties: props } });
+	const state = { instance: 'acme', objects: { 'fiscalcalendar:int-1': { id: 77, extra: { startMonth: 12, datasetId: 'aaaa-bbbb', table } } } };
+	const updates = [];
+	dataflows.updateDataflow = async (_c, id, def) => (updates.push(def), {});
+	const issues = await provisionFiscalCalendars(c, [need('integration:int-1')], { state, dataflows, sources: { 'int-1': source } });
+	assert.deepEqual(issues.map((i) => i.code), ['push.fiscal-calendar-created']);
+	assert.match(updates[0].actions[0].statements[0], /FROM DB\.SCH\.DIM_CALENDAR WHERE "CALENDAR_DATE" >= '1989-01-01'::DATE/);
+	assert.equal(updates[0].actions[1].dataSource.schemaMapping, undefined, 'an update leaves the table name to the rename');
+	assert.equal(c.registered[0].updated, true);
+	assert.equal(state.objects['fiscalcalendar:int-1'].extra.source, 'DB.SCH.DIM_CALENDAR');
+	updates.length = 0;
+	assert.deepEqual(await provisionFiscalCalendars(c, [need('integration:int-1')], { state, dataflows, sources: { 'int-1': source } }), []);
+	assert.equal(updates.length, 0);
+	const wrong = await provisionFiscalCalendars(c, [need('integration:int-1', 7)], { state, dataflows, sources: { 'int-1': source } });
+	assert.equal(wrong[0].code, 'push.fiscal-calendar-failed');
 });

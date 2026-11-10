@@ -366,3 +366,32 @@ export async function registerTables(c, integrationId, tables, { attempts = 3, d
 	};
 	return withTransientRetry(attempt, { attempts, delaysMs: [delayMs], sleep });
 }
+
+/** @typedef {{ database: string, schemaName: string, tableName: string }} WarehouseTable */
+
+const nameWords = (text) => String(text ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+const MAX_TABLE_NAME = 128;
+
+/** Already in the form ice's sanitizer gives (one `_` per run of other characters), so ice keeps it as sent. */
+export function warehouseTableName(scope, name) {
+	const prefix = nameWords(scope);
+	let words = nameWords(name);
+	if (prefix.length && words.length > prefix.length && prefix.every((w, i) => words[i] === w)) words = words.slice(prefix.length);
+	const full = ['T2D', ...prefix, ...(words.length ? words : ['DATA'])].join('_');
+	return full.length <= MAX_TABLE_NAME ? full : full.slice(0, MAX_TABLE_NAME).replace(/_+$/, '');
+}
+
+export const isIceDefaultTableName = (tableName, datasetId) => String(tableName).toLowerCase() === String(datasetId).toLowerCase().replace(/-/g, '_');
+
+/** ice adds `_<n>` to a name another table already holds (SchemaService.getUniqueTableName). */
+export const isWarehouseTableName = (tableName, wanted) => new RegExp(`^${wanted}(_\\d+)?$`, 'i').test(String(tableName));
+
+/** @returns {Promise<WarehouseTable>} */
+export async function getDatasetTable(c, integrationId, datasetId) {
+	return c.get(`${BYOS}/${seg(integrationId)}/datasets/${seg(datasetId)}/mapping`);
+}
+
+/** ice renames the table in place (ExternalDeviceController.saveSchemaMapping). icebox 500s without `standardize`. @returns {Promise<WarehouseTable>} the name ice settled on */
+export async function renameDatasetTable(c, integrationId, datasetId, { database, schemaName, tableName }) {
+	return c.put(`${BYOS}/${seg(integrationId)}/datasets/${seg(datasetId)}/mapping`, { mapping: { database, schemaName, tableName }, standardize: true });
+}

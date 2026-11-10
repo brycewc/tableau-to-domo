@@ -62,3 +62,8 @@ export async function validateIntegrationFiscalCalendar(c, integrationId, table)
 export async function registerIntegrationFiscalCalendar(c, integrationId, table) {
 	return c.post(calendarPath(integrationId, 'register'), { ...table, calendarType: 'FISCAL' }, { idempotent: false });
 }
+
+/** icebox ByosResource.updateCalendar. @param {CalendarTable} table */
+export async function updateIntegrationFiscalCalendar(c, integrationId, table) {
+	return c.put(calendarPath(integrationId, 'update'), { ...table, calendarType: 'FISCAL' }, { idempotent: false });
+}

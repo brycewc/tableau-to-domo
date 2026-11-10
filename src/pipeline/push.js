@@ -535,7 +535,7 @@ async function pushPlanUnlocked({
 		emitter.step('Fiscal calendars');
 		const others = await otherWorkbookNeeds(ws, slug);
 		if (!dryRun && kinds.has('dataflows')) {
-			preflightIssues.push(...(await provisionFiscalCalendars(c, calendars, { state, dataflows: d.dataflows, others, emitter })));
+			preflightIssues.push(...(await provisionFiscalCalendars(c, calendars, { state, dataflows: d.dataflows, others, emitter, sources: mappings.fiscalCalendars ?? {} })));
 			await saveState(ws, state);
 		}
 		preflightIssues.push(...(await checkFiscalCalendars(reader, calendars, { instance: config.domo?.instance || instance, state })));
@@ -559,6 +559,7 @@ async function pushPlanUnlocked({
 	const recreatedViews = new Set();
 	const layoutsPushed = new Set();
 	const refreshed = new Set();
+	const integrations = new Map();
 	/** Datasets that never had data, so cards on them would fail ("could not load schema"), mapped to the reason. */
 	const noData = new Map();
 
@@ -1001,7 +1002,9 @@ async function pushPlanUnlocked({
 			await d.datasets.waitForReadable(c, id, { columns });
 			refreshed.add(ref);
 		}
-		await record({ ...base, action, id, status: 'ok' });
+		const notes = [];
+		if (body.cloudId) await nameWarehouseTable(body.cloudId, id, d.cloudAmplifier.warehouseTableName(slug, ds.name), notes);
+		await record({ ...base, action, id, status: 'ok', notes });
 	}
 
 	timer.phase('dataflows', kinds.has('dataflows'));
@@ -1041,7 +1044,7 @@ async function pushPlanUnlocked({
 				let id = entry?.id;
 				let response = null;
 				if (!entry) {
-					response = await d.dataflows.createDataflow(c, def);
+					response = await d.dataflows.createDataflow(c, await withOutputTables(def, df, outputs));
 					id = idOf(response, 'id');
 					if (id == null) throw new Error('createDataflow returned no id');
 					setEntry(state, ref, { id, hash, extra: { workbooks: [slug] } });
@@ -1076,7 +1079,9 @@ async function pushPlanUnlocked({
 					const oentry = getEntry(state, oref);
 					if (oentry) {
 						if (run) refreshed.add(oref);
-						await record({ kind: 'dataset', key: o.key, name: o.name, action: 'reuse', id: oentry.id, status: 'ok', notes: [`output of dataflow ${df.key}`] });
+						const notes = [`output of dataflow ${df.key}`];
+						if (def.databaseType === 'ADR') await nameWarehouseTable(def.computeCloud, oentry.id, d.cloudAmplifier.warehouseTableName(slug, o.name), notes);
+						await record({ kind: 'dataset', key: o.key, name: o.name, action: 'reuse', id: oentry.id, status: 'ok', notes });
 					} else {
 						await record({ kind: 'dataset', key: o.key, name: o.name, action: 'create', status: 'failed', error: `Output "${o.dataflowOutput?.outputName ?? o.name}" not found in the dataflow response` });
 					}
@@ -1111,6 +1116,42 @@ async function pushPlanUnlocked({
 			setEntry(state, oref, { id, extra: { strategy: 'dataflow-output', dataflowKey: df.key } });
 			unretire(oref);
 		});
+	}
+
+	// Create only: dataProcessing standardizes a re-sent mapping, and ice suffixes a name it already sees in use.
+	async function withOutputTables(def, df, outputs) {
+		if (def.databaseType !== 'ADR' || !def.computeCloud || !d.cloudAmplifier.getIntegration) return def;
+		if (!integrations.has(def.computeCloud)) integrations.set(def.computeCloud, await d.cloudAmplifier.getIntegration(c, def.computeCloud).catch(() => null));
+		const target = integrations.get(def.computeCloud);
+		if (!target?.writeable || !target.database || !target.defaultSchema) return def;
+		const byName = new Map(outputs.map((o) => [norm(o.dataflowOutput?.outputName ?? o.name), o]));
+		const actions = def.actions.map((a) => {
+			if (a.type !== 'PublishToVault' || !a.dataSource) return a;
+			const o = byName.get(norm(a.dataSource.name ?? a.name));
+			const tableName = d.cloudAmplifier.warehouseTableName(slug, o?.name ?? a.dataSource.name ?? a.name);
+			return { ...a, dataSource: { ...a.dataSource, schemaMapping: { database: target.database, schemaName: target.defaultSchema, tableName } } };
+		});
+		return { ...def, actions };
+	}
+
+	async function nameWarehouseTable(integrationId, datasetId, wanted, notes) {
+		if (!integrationId || !d.cloudAmplifier.renameDatasetTable) return;
+		try {
+			const current = await d.cloudAmplifier.getDatasetTable(c, integrationId, datasetId);
+			const name = String(current?.tableName ?? '');
+			if (!name || d.cloudAmplifier.isWarehouseTableName(name, wanted)) return;
+			const namedByDomoOrT2d = d.cloudAmplifier.isIceDefaultTableName(name, datasetId) || /^T2D_/i.test(name);
+			if (!namedByDomoOrT2d) return;
+			const renamed = await d.cloudAmplifier.renameDatasetTable(c, integrationId, datasetId, { database: current.database, schemaName: current.schemaName, tableName: wanted });
+			notes.push(`Snowflake table ${current.database}.${current.schemaName}.${renamed?.tableName ?? wanted}`);
+		} catch (err) {
+			summary.issues.push({
+				severity: 'warning',
+				code: 'push.warehouse-table-name',
+				message: `Could not name the Snowflake table of dataset ${datasetId} ${wanted}: ${errorMessage(err)}`,
+				object: { type: 'dataset', name: wanted, id: datasetId }
+			});
+		}
 	}
 
 	function unretire(ref) {

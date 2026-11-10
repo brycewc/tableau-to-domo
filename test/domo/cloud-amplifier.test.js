@@ -10,6 +10,8 @@ import {
 	listObjects,
 	normalizeHost,
 	parseRegistration,
+	isWarehouseTableName,
+	warehouseTableName,
 	parseSnowflakeAccount,
 	registerTables,
 	resolveSnowflakeAccounts
@@ -266,4 +268,15 @@ test('resolveSnowflakeAccounts reads each service account once and keeps service
 	} finally {
 		mock.restore();
 	}
+});
+
+test('warehouse table names: T2D, the workbook, then the dataset name without a repeat of the workbook', () => {
+	assert.equal(warehouseTableName('podio-xero-dash', 'Podio Xero Dash - SNOWFLAKE - Custom SQL Query'), 'T2D_PODIO_XERO_DASH_SNOWFLAKE_CUSTOM_SQL_QUERY');
+	assert.equal(warehouseTableName('dbr', 'DBR (Magic ETL calcs)'), 'T2D_DBR_MAGIC_ETL_CALCS');
+	assert.equal(warehouseTableName('dbr-daily-trend', 'DBR (Magic ETL calcs)'), 'T2D_DBR_DAILY_TREND_DBR_MAGIC_ETL_CALCS');
+	assert.equal(warehouseTableName('dbr', 'DBR'), 'T2D_DBR_DBR');
+	assert.ok(isWarehouseTableName('t2d_dbr_dbr_1', 'T2D_DBR_DBR'), 'with the suffix ice adds to a taken name');
+	assert.ok(!isWarehouseTableName('T2D_DBR_DBR_X', 'T2D_DBR_DBR'));
+	const long = warehouseTableName('sharefile-arr', 'x '.repeat(100));
+	assert.ok(long.length <= 128 && !long.endsWith('_'));
 });

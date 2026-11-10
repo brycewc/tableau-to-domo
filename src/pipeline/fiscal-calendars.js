@@ -1,5 +1,6 @@
 import { calendarConflicts, calendarNeeds, fiscalStartName, targetLabel } from '../convert/fiscal.js';
-import { getInstanceCalendarTable, getIntegrationFiscalCalendar, queryStandardCalendar, registerIntegrationFiscalCalendar, validateIntegrationFiscalCalendar } from '../domo/calendars.js';
+import { getInstanceCalendarTable, getIntegrationFiscalCalendar, queryStandardCalendar, registerIntegrationFiscalCalendar, updateIntegrationFiscalCalendar, validateIntegrationFiscalCalendar } from '../domo/calendars.js';
+import { getDatasetTable, isWarehouseTableName, renameDatasetTable } from '../domo/cloud-amplifier.js';
 import { fiscalCalendarDataflow } from '../magic/fiscal-calendar.js';
 import { getEntry, setEntry } from './state.js';
 
@@ -41,7 +42,7 @@ export const calendarRef = (integrationId) => `fiscalcalendar:${integrationId}`;
 
 /** For a writeable integration without a fiscal calendar. The state entry has no workbook stamp, so unpush keeps it.
  * @param {{ state: import('../model/types.js').PushState, dataflows: typeof import('../domo/dataflows.js'), others?: { slug: string, needs: any[] }[], emitter?: any }} opts */
-export async function provisionFiscalCalendars(c, needs, { state, dataflows, others = [], emitter }) {
+export async function provisionFiscalCalendars(c, needs, { state, dataflows, others = [], emitter, sources = {} }) {
 	const issues = [];
 	const contested = new Set(calendarConflicts([...needs, ...others.flatMap((o) => o.needs)]).map((x) => x.need.target));
 	for (const need of needs.filter((n) => n.target !== 'instance' && !contested.has(n.target))) {
@@ -49,10 +50,23 @@ export async function provisionFiscalCalendars(c, needs, { state, dataflows, oth
 		const ref = calendarRef(id);
 		try {
 			const { name, calendar, writeback } = await getIntegrationFiscalCalendar(c, id);
-			if (calendar || !writeback) continue;
-			emitter?.progress(`Building the ${fiscalStartName(need.startMonth)} fiscal calendar for Cloud Amplifier integration "${name}"`, { ref });
-			const def = fiscalCalendarDataflow({ integrationId: id, integrationName: name, startMonth: need.startMonth });
+			const source = sources[id];
 			const entry = getEntry(state, ref);
+			const own = Boolean(calendar && entry?.extra?.table && sameTable(entry.extra.table, calendar));
+			if (source && source.startMonth !== need.startMonth) throw new Error(`mappings.json fiscalCalendars maps ${source.table}, whose year starts in ${fiscalStartName(source.startMonth)}, but these cards need ${fiscalStartName(need.startMonth)}`);
+			if (!writeback || (calendar && !(own && source && entry.extra.source !== source.table))) {
+				if (own && entry.extra.datasetId) {
+					const table = await nameCalendarTable(c, id, entry.extra.datasetId, entry.extra.startMonth ?? need.startMonth);
+					if (!sameTable(table, calendar)) {
+						await updateIntegrationFiscalCalendar(c, id, table);
+						setEntry(state, ref, { extra: { table } });
+						issues.push({ severity: 'info', code: 'push.fiscal-calendar-renamed', message: `Renamed the fiscal calendar table of Cloud Amplifier integration "${name}" (${id}) to ${table.database}.${table.schema}.${table.table}`, object: { type: 'dataflow', name: 'fiscal calendar', id: String(entry.id) } });
+					}
+				}
+				continue;
+			}
+			emitter?.progress(`Building the ${fiscalStartName(need.startMonth)} fiscal calendar for Cloud Amplifier integration "${name}"${source ? ` from ${source.table}` : ''}`, { ref });
+			const def = fiscalCalendarDataflow({ integrationId: id, integrationName: name, startMonth: need.startMonth, source, ...(entry?.id == null ? { table: { ...writeback, table: calendarTableName(need.startMonth) } } : {}) });
 			let dataflowId = entry?.id;
 			if (dataflowId == null) {
 				dataflowId = (await dataflows.createDataflow(c, def))?.id;
@@ -66,16 +80,16 @@ export async function provisionFiscalCalendars(c, needs, { state, dataflows, oth
 			await dataflows.waitForExecution(c, dataflowId, started?.id);
 			const datasetId = dataflows.outputDatasetIds(await dataflows.getDataflow(c, dataflowId))[0];
 			if (!datasetId) throw new Error(`dataflow ${dataflowId} has no output dataset`);
-			// ice names a writeback table after its dataset id (SchemaService.getSanitizedUniqueTableName).
-			const table = { ...writeback, table: datasetId.replace(/-/g, '_') };
+			const table = await nameCalendarTable(c, id, datasetId, need.startMonth);
 			const valid = await validateIntegrationFiscalCalendar(c, id, table);
 			if (!valid.success) throw new Error(`the table ${table.database}.${table.schema}.${table.table} it wrote is not a valid calendar: ${valid.message}`);
-			await registerIntegrationFiscalCalendar(c, id, table);
-			setEntry(state, ref, { extra: { startMonth: need.startMonth, datasetId, table } });
+			if (calendar) await updateIntegrationFiscalCalendar(c, id, table);
+			else await registerIntegrationFiscalCalendar(c, id, table);
+			setEntry(state, ref, { extra: { startMonth: need.startMonth, datasetId, table, ...(source ? { source: source.table } : {}) } });
 			issues.push({
 				severity: 'info',
 				code: 'push.fiscal-calendar-created',
-				message: `Registered ${setupText(need)} on Cloud Amplifier integration "${name}" (${id}): ${table.database}.${table.schema}.${table.table}, written by dataflow ${dataflowId}`,
+				message: `Registered ${setupText(need)} on Cloud Amplifier integration "${name}" (${id}): ${table.database}.${table.schema}.${table.table}, written by dataflow ${dataflowId}${source ? ` from ${source.table}` : ''}`,
 				object: { type: 'dataflow', name: def.name, id: String(dataflowId) }
 			});
 		} catch (err) {
@@ -83,6 +97,16 @@ export async function provisionFiscalCalendars(c, needs, { state, dataflows, oth
 		}
 	}
 	return issues;
+}
+
+// Not T2D_...: ice reads a calendar name starting with T as a schema-id table and never resolves it (DatasourceExtractor.getDatasourceMap).
+const calendarTableName = (startMonth) => `FISCAL_CALENDAR_${fiscalStartName(startMonth).toUpperCase()}_START`;
+
+async function nameCalendarTable(c, integrationId, datasetId, startMonth) {
+	const wanted = calendarTableName(startMonth);
+	let current = await getDatasetTable(c, integrationId, datasetId);
+	if (!isWarehouseTableName(current?.tableName, wanted)) current = { ...current, ...(await renameDatasetTable(c, integrationId, datasetId, { database: current.database, schemaName: current.schemaName, tableName: wanted })) };
+	return { database: current.database, schema: current.schemaName, table: current.tableName };
 }
 
 /** Reads only. A calendar t2d registered (`state`) is known to match. @returns {Promise<Issue[]>} */

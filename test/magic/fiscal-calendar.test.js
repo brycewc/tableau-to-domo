@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fiscalCalendarDataflow, fiscalCalendarSql } from '../../src/magic/fiscal-calendar.js';
+import { fiscalCalendarDataflow, fiscalCalendarSql, sourceCalendarSql } from '../../src/magic/fiscal-calendar.js';
 
 const REQUIRED = ['DOMO_Key', 'Date', 'DayOfWeek', 'DayNumberInWeek', 'DayNumberInMonth', 'DayNumberInQuarter', 'DayNumberInYear', 'WeekNumberInYear', 'MonthName', 'MonthAbrv', 'MonthNumberInYear', 'Quarter', 'Year', 'CalendarMonth', 'CalendarQuarter', 'WeekStart', 'QuarterStart', 'DaySinceEpoch', 'WeekSinceEpoch', 'MonthSinceEpoch', 'QuarterSinceEpoch', 'YearSinceEpoch', 'MonthStart', 'YearStart', 'QuarterOfYear'];
 
@@ -34,4 +34,12 @@ test('the calendar dataflow runs on the warehouse in the graph editor format and
 	assert.deepEqual(out.dependsOn, [sql.id]);
 	assert.equal(out.dataSource.cloudId, 'int-1');
 	assert.equal(out.dataSource.name, 't2d Fiscal Calendar (December start)');
+});
+
+test('a mapped calendar table keeps its own fiscal years, quarters and periods', () => {
+	const sql = sourceCalendarSql({ table: 'DB.SCH.DIM_CALENDAR', startMonth: 12, columns: { date: 'CALENDAR_DATE', fiscalYear: 'FISCAL_YEAR_NUM', fiscalQuarter: 'FISCAL_QUARTER_NUM', fiscalPeriod: 'FISCAL_PERIOD_NUM' } });
+	assert.match(sql, /CAST\("FISCAL_YEAR_NUM" AS INTEGER\) AS "FY"/);
+	assert.match(sql, /MIN\("D"\) OVER \(PARTITION BY "FY"\) AS "YS"/);
+	for (const name of ['DOMO_Key', 'Year', 'QuarterStart', 'WeekStart', 'QuarterOfYear']) assert.match(sql, new RegExp(`AS "${name}"`));
+	assert.throws(() => sourceCalendarSql({ table: 'T', columns: {} }), /needs table and columns/);
 });
