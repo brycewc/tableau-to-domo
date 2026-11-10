@@ -42,7 +42,8 @@ export function fiscalCalendarSql(startMonth, years = CALENDAR_YEARS) {
 		['WeekStart', weekStart('"D"')],
 		['QuarterStart', '"QS"'],
 		['DaySinceEpoch', int(`DATEDIFF(day, '1969-12-31'::DATE, "D")`)],
-		['WeekSinceEpoch', int(`DATEDIFF(day, '1969-12-28'::DATE, ${weekStart('"D"')}) / 7`)],
+		// icebox seeds it with daySinceEpoch / 7 on the first row (1043 on 1990-01-01), then adds one per week
+		['WeekSinceEpoch', int(`DATEDIFF(day, '1970-01-04'::DATE, ${weekStart('"D"')}) / 7`)],
 		['MonthSinceEpoch', int('(YEAR("D") - 1970) * 12 + MONTH("D")')],
 		['QuarterSinceEpoch', int(`("FY" - ${epochYear}) * 4 + "FQ" - 1`)],
 		['YearSinceEpoch', int(`"FY" - ${epochYear}`)],
