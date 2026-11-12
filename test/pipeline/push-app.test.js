@@ -46,8 +46,9 @@ test('push creates the app, reuses its default view, then cards, layouts, naviga
 	const first = (n) => order.indexOf(n);
 	assert.equal(first('appStudioStatus'), 0, 'feature flags are checked before any write');
 	assert.ok(first('createDataset') > first('appStudioStatus'));
-	const sequence = ['createApp', 'renameView', 'createView', 'createCard', 'writeLayout', 'reorderNavigation', 'setLanding', 'setViewVisible', 'putPersistSettings'];
+	const sequence = ['createApp', 'renameView', 'createView', 'createCard', 'writeLayout', 'reorderNavigation', 'setViewVisible', 'putPersistSettings'];
 	assert.ok(sequence.every((n) => first(n) >= 0), order.join(','));
+	assert.ok(!order.includes('setLanding'), 'the default view the first view takes over is already the landing view');
 	assert.deepEqual([...sequence].sort((a, b) => first(a) - first(b)), sequence);
 	assert.ok(!order.includes('createPage') && !order.includes('updatePage'), 'no classic page calls');
 	assert.ok(!order.includes('updateApp'), 'create carries the settings, so no app PUT follows it');
@@ -204,7 +205,7 @@ test('re-push of an unchanged plan writes nothing; a renamed dashboard renames i
 	calls.length = 0;
 	const third = await pushPlan({ config, slug: 'sales', deps, emitter: quiet });
 	const state = await loadState(ws, 'acme');
-	assert.deepEqual(names(calls).filter((n) => APP_WRITES.has(n)), ['renameView', 'reorderNavigation', 'setLanding', 'putPersistSettings']);
+	assert.deepEqual(names(calls).filter((n) => APP_WRITES.has(n)), ['renameView', 'reorderNavigation', 'putPersistSettings'], 'an unchanged landing view is not set again');
 	assert.deepEqual(calls.find((c) => c.name === 'renameView').args.viewId, state.objects['page:details'].id);
 	assert.equal(third.actions.find((a) => a.kind === 'page' && a.key === 'details').action, 'update');
 	const nav = server.nav.get(String(state.objects['app:root'].id));
@@ -497,7 +498,7 @@ test('navigation leaves out a view deleted in Domo outside the subset, so the la
 	const state = await loadState(ws, 'acme');
 	const app = server.apps.get(String(state.objects['app:root'].id));
 	app.views = app.views.filter((v) => String(v.viewId) !== String(state.objects['page:dash'].id));
-	app.landingViewId = state.objects['page:details'].id;
+	app.landingViewId = 0;
 	server.nav.set(String(app.dataAppId), server.nav.get(String(app.dataAppId)).filter((n) => n.entityId !== String(state.objects['page:dash'].id)));
 	plan.pages[1].title = 'Details 2';
 	await ws.writeJson(p.plan, plan);

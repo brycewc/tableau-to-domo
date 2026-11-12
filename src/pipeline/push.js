@@ -2940,7 +2940,8 @@ async function pushPlanUnlocked({
 			const current = live?.landingViewId;
 			const foreignLanding = current != null && String(current) !== '0' && !views.some((v) => String(v.id) === String(current)) && appViewIds(live).some((id) => String(id) === String(current));
 			if (foreignLanding) notes.push(`kept the landing view ${current}, a view t2d did not create`);
-			else if (landing) await d.apps.setLanding(c, appId, landing.id);
+			// Each landing write, even an unchanged one, gives every other view a title-less page entry in Domo search.
+			else if (landing && String(live?.landingViewId) !== String(landing.id)) await d.apps.setLanding(c, appId, landing.id);
 			for (const v of views) if (hide(v) && shown.has(String(v.id))) await setVisible(v, false);
 			if (app.persistSettings) {
 				await d.apps.putPersistSettings(c, appId, app.persistSettings);

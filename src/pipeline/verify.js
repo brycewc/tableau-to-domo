@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { requireDomo, requireTableau } from '../config.js';
 import { keyMatcher } from '../convert/select.js';
+import { findPageStubs } from '../domo/search.js';
 import { createEmitter } from '../util/events.js';
 import { collectRefs } from '../util/refs.js';
 import { loadState } from './state.js';
@@ -575,6 +576,8 @@ export async function verifyWorkbook({ config, slug, tolerance = 0.005, keys, em
 		if (signedIn) await tableau.signOut().catch(() => {});
 	}
 
+	const searchStubs = await appViewSearchStubs(domo, plan, state, emitter);
+
 	const counts = { ok: 0, differs: 0, 'not-comparable': 0 };
 	for (const r of results) counts[r.status]++;
 	const sampled = results.map((r) => r.sampled).find(Boolean);
@@ -586,12 +589,29 @@ export async function verifyWorkbook({ config, slug, tolerance = 0.005, keys, em
 		...(sampled ? { sampled } : {}),
 		cards: results,
 		counts,
+		...(searchStubs ? { searchStubs } : {}),
 		verifiedAt: new Date().toISOString()
 	};
 	await ws.writeJson(path.join(p.dir, 'verify.json'), summary);
 	if (sampled) emitter.warn(`Card data comes from a sample (${sampled} rows per table); totals cannot match Tableau. Extract and push again without --sample-rows to verify totals.`);
 	emitter.done(`${counts.ok} ok, ${counts.differs} differ, ${counts['not-comparable']} not comparable`);
 	return summary;
+}
+
+async function appViewSearchStubs(domo, plan, state, emitter) {
+	const views = (plan.pages ?? []).map((pg) => ({ pg, entry: state.objects[`page:${pg.key}`] })).filter(({ entry }) => entry?.id != null && entry.extra?.container === 'app');
+	if (!views.length) return undefined;
+	let stubs;
+	try {
+		stubs = await findPageStubs(domo, views.map(({ entry }) => entry.id));
+	} catch (err) {
+		emitter.warn(`Could not check the search entries of the app views: ${err?.message ?? err}`);
+		return undefined;
+	}
+	const stubIds = new Set(stubs.map((s) => s.id));
+	const out = views.filter(({ entry }) => stubIds.has(String(entry.id))).map(({ pg, entry }) => ({ viewId: String(entry.id), key: pg.key, title: pg.title }));
+	for (const s of out) emitter.warn(`App view "${s.title}" (${s.viewId}) has a title-less page entry in Domo search: it shows as "${s.viewId}" in Apps & Dashboards and search`);
+	return out;
 }
 
 function finish(cmp, result) {

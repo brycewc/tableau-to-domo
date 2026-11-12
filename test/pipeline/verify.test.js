@@ -295,6 +295,23 @@ test('verifyWorkbook compares pushed cards and writes verify.json', async () => 
 	assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir, 'verify.json'), 'utf8')).counts.ok, 1);
 });
 
+test('verifyWorkbook flags pushed app views that have a title-less page search entry', async () => {
+	const { root, ws } = await pushedWorkspace();
+	const state = await ws.readJson(ws.stateFile('acme'));
+	state.objects['page:root'] = { id: 7, extra: { container: 'app', appId: 5 } };
+	state.objects['page:dash'] = { id: 8, extra: { container: 'app', appId: 5 } };
+	await ws.writeJson(ws.stateFile('acme'), state);
+	const { deps } = fakes([{ id: 'v1', name: 'Sheet 1' }], { v1: 'Region\nEast\n' }, { 101: render([{ name: 'Region', mapping: 'ITEM', type: 'STRING' }], [['East']]) });
+	const queried = [];
+	deps.domo.post = async (relPath, body) => {
+		queried.push(body.filters[0].value);
+		return { searchObjects: body.filters[0].value === '8' ? [{ entityType: 'page', databaseId: '8', owners: [], lastModified: 0 }] : [] };
+	};
+	const summary = await verifyWorkbook({ config: testConfig(root), slug: 'sales', keys: ['sheet-1'], deps });
+	assert.deepEqual(queried, ['7', '8']);
+	assert.deepEqual(summary.searchStubs, [{ viewId: '8', key: 'dash', title: 'Overview' }]);
+});
+
 test('verifyWorkbook matches a hidden worksheet to its dashboard view by columns and flags sampled data', async () => {
 	const { root } = await pushedWorkspace({ sampled: 100 });
 	const { deps } = fakes(

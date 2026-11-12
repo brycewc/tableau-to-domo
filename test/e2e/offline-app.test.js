@@ -56,12 +56,12 @@ test('push builds the app over HTTP, and a second push changes nothing', async (
 			call('PUT', /^\/content\/v3\/cards\/kpi$/),
 			call('PUT', /^\/content\/v4\/pages\/layouts\/\d+$/),
 			call('PUT', /^\/content\/v1\/dataapps\/\d+\/navigation\/reorder$/),
-			call('PUT', /^\/content\/v1\/dataapps\/\d+\/landing\/\d+$/),
 			call('PUT', /^\/content\/v1\/dataapps\/\d+\/persistSettings$/)
 		];
 		assert.ok(sequence.every((i) => i >= 0), `all endpoints called: ${sequence}`);
 		assert.deepEqual([...sequence].sort((a, b) => a - b), sequence, 'endpoints called in push order');
 		assert.ok(!server.calls.some((c) => c.path === '/content/v1/pages'), 'no classic pages');
+		assert.equal(call('PUT', /^\/content\/v1\/dataapps\/\d+\/landing\/\d+$/), -1, 'the default view taken over is already the landing view');
 		assert.equal(call('PUT', /^\/content\/v1\/dataapps\/\d+$/), -1, 'create carries the settings, so no app PUT follows it');
 		const createBody = server.calls[call('POST', /^\/content\/v1\/dataapps$/)].body;
 		assert.deepEqual([createBody.type, createBody.navOrientation, createBody.showNavigation], ['app', 'TOP', true]);

@@ -59,6 +59,9 @@ export async function run({ config, args, reporter }) {
 	reporter.print(rows.length ? formatTable(['Card', 'Status', 'Tableau view', 'Card id', 'Detail'], rows) : 'No cards in the plan.');
 	const n = summary.counts;
 	reporter.print(`\n${slug} on ${summary.instance}: ${n.ok} ok, ${n.differs} differ, ${n['not-comparable']} not comparable (tolerance ${tolerance * 100}%)`);
+	for (const s of summary.searchStubs ?? []) {
+		reporter.print(`Search: app view "${s.title}" (${s.viewId}) has a title-less page entry; it shows as "${s.viewId}" in Apps & Dashboards and search.`);
+	}
 	if (summary.sampled) {
 		reporter.print(`Sampled data (${summary.sampled} rows per table): cards were only checked for rows and members Tableau lacks, not for totals.`);
 	}
