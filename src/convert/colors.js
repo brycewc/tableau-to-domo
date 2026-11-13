@@ -149,6 +149,40 @@ function markColorRules(ws, { family, slots, values, dataSourceId }) {
 	return { rules: [...rules, ...last.slice(0, 1)], issues };
 }
 
+const MAX_DIVERGING_RANGES = 5;
+
+/** '3-5,7' from [3, 4, 5, 7]. */
+function numberList(numbers) {
+	const sorted = [...new Set(numbers)].sort((a, b) => a - b);
+	const runs = [];
+	for (const n of sorted) {
+		const run = runs.at(-1);
+		if (run && n === run[1] + 1) run[1] = n;
+		else runs.push([n, n]);
+	}
+	return runs.map(([a, b]) => (a === b ? String(a) : `${a}-${b}`)).join(',');
+}
+
+/**
+ * Mega Table heatmap overrides (TableCSR) for a Tableau color gradient on the given columns. `columnNumbers` count the
+ * subscription columns from 1. One range over all the columns, as Tableau's one scale; a diverging scale keeps its center
+ * and, when stepped, its step count. Colors stay Domo's theme gradients. Pure.
+ * @param {import('../model/types.js').ColorEncodingIR|undefined} encoding
+ * @param {number[]} columnNumbers
+ * @returns {Record<string, string>}
+ */
+export function heatmapOverrides(encoding, columnNumbers) {
+	const overrides = { use_heatmap_colors: 'true', heatmap_columns: numberList(columnNumbers), range_by_column: 'false' };
+	const diverging = encoding?.paletteType === 'ordered-diverging' || /diverging/i.test(encoding?.palette ?? '') || encoding?.center !== undefined;
+	if (!diverging) return overrides;
+	overrides.show_diverging = 'true';
+	if (!encoding.center) overrides.midpoint_value_type = 'Zero';
+	else Object.assign(overrides, { midpoint_value_type: 'Manual', midpoint_value: String(encoding.center) });
+	overrides.diverging_range_count = String(encoding.steps ? Math.min(MAX_DIVERGING_RANGES, Math.max(1, Math.floor(encoding.steps / 2))) : MAX_DIVERGING_RANGES);
+	if (encoding.steps % 2 === 1) overrides.show_midpoint = 'true';
+	return overrides;
+}
+
 function pillName(pillId) {
 	const m = /\]\.\[(?:[a-z0-9]*:)?(.*?)(?::[a-z0-9]+)*\]$/i.exec(pillId ?? '');
 	return m ? m[1] : String(pillId ?? '');

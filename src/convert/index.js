@@ -1,5 +1,5 @@
 import { combineDataflows, moveDataflowsToWarehouse, useGraphEditor } from './combine-dataflows.js';
-import { warehouseSafeSorts } from './warehouse-sorts.js';
+import { warehouseBackreferences, warehouseSafeSorts } from './warehouse-sorts.js';
 import { IR_VERSION, PLAN_VERSION } from '../model/types.js';
 import { slugify } from '../util/ids.js';
 import { createEmitter, noopSink } from '../util/events.js';
@@ -120,6 +120,19 @@ function fiscalStartIssues(ir, version) {
 	];
 }
 
+function axisTitleIssues(ir, version) {
+	if (version >= 19 || !(ir.worksheets ?? []).some((w) => (w.rowPills ?? []).length || (w.colPills ?? []).length)) return [];
+	return [
+		{
+			severity: 'info',
+			code: 'convert.ir-outdated',
+			message: `ir.json was extracted by an older t2d (IR version ${version}, now ${IR_VERSION}), which did not read axis titles, hidden axes and field labels, or turned-off tooltips, so axis titles use Tableau's default names`,
+			object: { type: 'workbook', name: ir.workbook?.name || 'Workbook' },
+			suggestion: 'Run t2d extract again for this workbook, then convert.'
+		}
+	];
+}
+
 function unscopedFilterIssues(ir, version) {
 	if (version >= 13) return [];
 	const sheets = new Map((ir.worksheets ?? []).map((w) => [w.name, w]));
@@ -152,8 +165,9 @@ function unscopedFilterIssues(ir, version) {
  * one from before version 7 no secondary quick table calcs, one from before version 8 no column collations, one from
  * before version 9 no Hide filters, one from before version 10 no underlined headers, one from before version 12 cut
  * color maps at 200 members, one from before version 13 has no filter scope or members-of-set filters, and one from
- * before version 15 no worksheet window filter cards, one from before version 16 no table shading, and one from before
- * version 17 no fiscal year starts.
+ * before version 15 no worksheet window filter cards, one from before version 16 no table shading, one from before
+ * version 17 no fiscal year starts, one from before version 18 no worksheet window parameter and legend cards, and one
+ * from before version 19 no axis titles, hidden axes and field labels, or tooltip mode.
  * @param {import('../model/types.js').WorkbookIR} ir
  * @returns {import('../model/types.js').Issue[]}
  */
@@ -185,7 +199,9 @@ export function outdatedIrIssues(ir, target) {
 											const tableStyle = tableStyleIssues(ir, version, asApp);
 											if (tableStyle.length) return tableStyle;
 											const fiscal = fiscalStartIssues(ir, version);
-											return fiscal.length ? fiscal : sideCardIssues(ir, version);
+											if (fiscal.length) return fiscal;
+											const sideCards = sideCardIssues(ir, version);
+											return sideCards.length ? sideCards : axisTitleIssues(ir, version);
 										}
 										return [
 											{
@@ -462,6 +478,7 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 	if (resolved.combineDataflows !== false) plan.issues.push(...combineDataflows(plan, { workbookKey }));
 	useGraphEditor(plan);
 	plan.issues.push(...warehouseSafeSorts(plan));
+	warehouseBackreferences(plan);
 	formatPlanSql(plan);
 	log.done('Conversion planned', { datasets: plan.datasets.length, cards: plan.cards.length, pages: plan.pages.length, issues: issues.length });
 	return plan;

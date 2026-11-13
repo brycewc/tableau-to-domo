@@ -1,6 +1,5 @@
-import { stripBrackets } from '../model/naming.js';
 import { domoNumberFormat } from './number-format.js';
-import { classifyPill, customTooltip, findField, markPanes, measureKey, pillFor, slotMacro, textTokens } from './chart-types.js';
+import { classifyPill, customTooltip, defaultTooltipText, labelPills, markPanes, measureKey, pillFor, pillLabel, slotMacro, tableauLabel, textTokens } from './chart-types.js';
 
 /**
  * @typedef {import('../model/types.js').WorkbookIR} WorkbookIR
@@ -21,7 +20,11 @@ const AXES = [...BARS, 'two_trendline', 'vert_area_overlay', 'vert_100pct_area',
 const badges = (names) => new Set(names.map((n) => `badge_${n}`));
 
 const PLAIN_BARS = BARS.filter((b) => !b.includes('line_bar'));
+const TITLED_AXES = [...BARS, 'two_trendline', 'vert_area_overlay', 'vert_100pct_area', 'stackedtrend', 'xyscatterplot_basic', 'xybubble'];
 const SUPPORT = {
+	axis_x: badges(TITLED_AXES),
+	// Combos title their two value scales with title_line and title_bar instead.
+	axis_y: badges(TITLED_AXES.filter((b) => !b.includes('line_bar'))),
 	hover_text: badges([...AXES, 'pie', 'donut', 'treemap', 'gantt']),
 	datalabel_text: badges([...AXES, 'pie', 'donut', 'gantt']),
 	legend: badges([...AXES, 'gantt']),
@@ -36,18 +39,8 @@ const PCT100 = /^badge_(vert|horiz)_100pct$|^badge_vert_100pct_area$/;
 const VALUE_MACRO = /%_(VALUE|ORIG_VALUE|TOOLTIP\d|PERCENT_OF_\w+|XVALUE|YVALUE|BUBBLE_VALUE)/;
 const TEXT_FAMILIES = new Set(['bar', 'line', 'area', 'combo', 'pie', 'scatter', 'heatmap', 'treemap', 'gantt']);
 
-const AGG_LABELS = { avg: 'Avg.', countd: 'Distinct count of', count: 'Count of', min: 'Min.', max: 'Max.', median: 'Median' };
-
 function issue(ws, severity, code, message) {
 	return { severity, code, message, object: { type: 'worksheet', name: ws.name } };
-}
-
-/** Tableau's default tooltip label for a pill: its field name, with the aggregation unless it is a sum. */
-function pillLabel(ws, ir, pillId) {
-	const pill = pillFor(ws, pillId);
-	const name = findField(ir, pill.datasourceId, pill.fieldId)?.name ?? stripBrackets(pill.fieldId);
-	const agg = AGG_LABELS[String(pill.derivation ?? '').toLowerCase()];
-	return agg ? `${agg} ${name}` : name;
 }
 
 /** Phoenix's own hover text for a chart type (HoverLabel, HandlerScaleBase, HandlerPie, HandlerHeatmap, ...). */
@@ -74,8 +67,9 @@ function parameterValue(ir, token) {
 
 /**
  * A Tableau tooltip or label as Phoenix hover or data label text: field tokens become macros, parameters their current
- * value, tabs spaces, and a line whose every field token has no macro is left out. Bold, colors and fonts are not carried.
- * `valueLost`: the Tableau text shows a measure, the translation none.
+ * value, tabs spaces, and a line whose every field token has no macro is left out, as is a line naming a table calc the
+ * card could not convert (`opts.unconverted`). Bold, colors and fonts are not carried.
+ * `valueLost`: the Tableau text shows a converted measure, the translation none.
  * @returns {{ text: string, dropped: string[], parameters: string[], valueLost: boolean }}
  */
 export function translateMarkText(text, ws, ir, slots, opts) {
@@ -87,6 +81,7 @@ export function translateMarkText(text, ws, ir, slots, opts) {
 		let out = '';
 		let macros = 0;
 		let misses = 0;
+		let unconverted = false;
 		for (const part of textTokens(line)) {
 			if ('text' in part) {
 				out += part.text.replace(/\t+/g, ' ');
@@ -103,9 +98,12 @@ export function translateMarkText(text, ws, ir, slots, opts) {
 				continue;
 			}
 			const pill = /^\[.+\]$/s.test(part.token);
-			if (pill && /^measure/.test(classifyPill(ws, ir, part.token).kind)) measures++;
 			const hit = pill ? slotMacro(ws, ir, part.token, slots, opts) : undefined;
-			if (hit?.macro) {
+			if (pill && !hit?.unconverted && /^measure/.test(classifyPill(ws, ir, part.token).kind)) measures++;
+			if (hit?.unconverted) {
+				unconverted = true;
+				dropped.push(pillLabel(ws, ir, part.token));
+			} else if (hit?.macro) {
 				out += hit.macro;
 				macros++;
 			} else {
@@ -113,34 +111,13 @@ export function translateMarkText(text, ws, ir, slots, opts) {
 				dropped.push(pill ? pillLabel(ws, ir, part.token) : `<${part.token.includes('=') ? part.token.split(/\s/)[0] : part.token}>`);
 			}
 		}
-		if (misses && !macros) continue;
+		if (unconverted || (misses && !macros)) continue;
 		lines.push(out.replace(/ {2,}/g, ' ').trimEnd());
 	}
 	while (lines.length && !lines[0].trim()) lines.shift();
 	while (lines.length && !lines.at(-1).trim()) lines.pop();
 	const joined = lines.join('\n');
 	return { text: joined, dropped: [...new Set(dropped)], parameters: [...new Set(parameters)], valueLost: measures > 0 && !VALUE_MACRO.test(joined) };
-}
-
-/**
- * The fields of a labeled pane's default label: its Text and Label shelf fields, else the measure it plots (its own axis
- * on a dual axis, else the one measure on Rows and Columns). Empty when that is Measure Values or several measures.
- */
-function labelPills(ws, ir, pane) {
-	const pills = [...new Set([...(pane.encodings?.text ?? []), ...(pane.encodings?.label ?? [])])];
-	if (pills.length) return pills;
-	const own = pane.yAxisPill ?? pane.xAxisPill;
-	const measures = own ? [own] : [...(ws.rowPills ?? []), ...(ws.colPills ?? [])].filter((id) => /^measure/.test(classifyPill(ws, ir, id).kind));
-	return measures.length === 1 && classifyPill(ws, ir, measures[0]).kind === 'measure' ? measures : [];
-}
-
-/** The data label Tableau draws: its customized label, else its label fields, else the mark's value. */
-function tableauLabel(ws, ir) {
-	const pane = markPanes(ws).find((p) => p.showLabels);
-	if (!pane) return undefined;
-	if (pane.label) return pane.label;
-	const pills = labelPills(ws, ir, pane);
-	return pills.length ? pills.map((id) => `<${id}>`).join('\n') : '<[Multiple Values]>';
 }
 
 const PERCENT_PLACES = ['None', '.0', '.00', '.000', '.0000', '.00000'];
@@ -199,30 +176,38 @@ function stackTotalPane(ws) {
  * Hover text and data label overrides for a card, from the worksheet's tooltip and mark labels.
  * @param {WorksheetIR} ws
  * @param {WorkbookIR} ir
- * @param {{ chartType: string, family: string, slots: CardSlot[] }} card  `slots` are the card's columns with their pills
+ * @param {{ chartType: string, family: string, slots: CardSlot[], unconverted?: string[] }} card  `slots` are the card's
+ *   columns with their pills; `unconverted` the pills whose table calc the card shows as the base aggregation
  * @returns {{ overrides: Record<string,string>, issues: Issue[] }}
  */
-export function markTextOverrides(ws, ir, { chartType, family, slots }) {
+export function markTextOverrides(ws, ir, { chartType, family, slots, unconverted = [] }) {
 	const overrides = {};
 	const issues = [];
 	if (!TEXT_FAMILIES.has(family)) return { overrides, issues };
-	const opts = { pct100: PCT100.test(chartType), family };
-	const translate = (text, what, target) => {
+	const opts = { pct100: PCT100.test(chartType), family, unconverted: new Set(unconverted.map((id) => measureKey(pillFor(ws, id)))) };
+	const valueUnconverted = slots.some((s) => s.mapping === 'VALUE' && unconverted.includes(s.pillId));
+	const translate = (text, what, target, { reportDropped = true } = {}) => {
 		const result = translateMarkText(text, ws, ir, slots, opts);
-		if (result.dropped.length) issues.push(issue(ws, 'info', 'chart.mark-text', `${what} item(s) ${result.dropped.join(', ')} have no Domo macro on this card; left out of the ${target}`));
+		if (reportDropped && result.dropped.length) issues.push(issue(ws, 'info', 'chart.mark-text', `${what} item(s) ${result.dropped.join(', ')} have no Domo macro on this card; left out of the ${target}`));
 		if (result.parameters.length) issues.push(issue(ws, 'info', 'chart.mark-text', `${what} shows the current parameter value(s) as fixed text (${result.parameters.join(', ')}); it does not follow later variable changes`));
 		return result;
 	};
 	if (SUPPORT.hover_text.has(chartType)) {
 		const custom = customTooltip(ws);
 		const extras = slots.filter((s) => /^EXTRAINFO\d$/.test(s.mapping));
-		if (custom) {
+		if (ws.tooltipMode === 'none') {
+			issues.push(issue(ws, 'info', 'chart.tooltip-off', 'Tableau shows no tooltip on this sheet; Domo always shows a hover, left at its default'));
+		} else if (custom) {
 			const { text, valueLost } = translate(custom, 'Tooltip', 'hover text');
 			// A hover text without the mark's value is worse than Domo's default one.
-			if (text && !valueLost) overrides.hover_text = text;
-		} else if (extras.length) {
-			const lines = extras.map((s) => `${pillLabel(ws, ir, s.pillId)}: %_TOOLTIP${s.mapping.slice(-1)}`);
-			overrides.hover_text = [defaultHoverText(chartType, slots), ...lines].join('\n');
+			if (text && (!valueLost || valueUnconverted)) overrides.hover_text = text;
+		} else {
+			const { text, valueLost } = translate(defaultTooltipText(ws, ir), 'Tooltip', 'hover text', { reportDropped: false });
+			if (text && (!valueLost || valueUnconverted)) overrides.hover_text = text;
+			else if (extras.length) {
+				const lines = extras.map((s) => `${pillLabel(ws, ir, s.pillId)}: %_TOOLTIP${s.mapping.slice(-1)}`);
+				overrides.hover_text = [defaultHoverText(chartType, slots), ...lines].join('\n');
+			}
 		}
 	}
 	const total = STACK_TOTALS.has(chartType) ? stackTotalPane(ws) : undefined;
@@ -235,7 +220,7 @@ export function markTextOverrides(ws, ir, { chartType, family, slots }) {
 	if (label) {
 		const { text, valueLost } = translate(label, 'Mark label', 'data label');
 		// A label's measure Domo cannot name is still the mark's own value (one series per measure).
-		const shown = valueLost ? [text, '%_VALUE'].filter(Boolean).join('\n') : text;
+		const shown = valueLost && !valueUnconverted ? [text, '%_VALUE'].filter(Boolean).join('\n') : text;
 		if (shown) overrides.datalabel_text = shown;
 		const places = /%_(ORIG_)?PERCENT_OF_/.test(shown ?? '') ? labelPercentPlaces(ws, ir) : undefined;
 		if (places) overrides.percent_decimal_places = places;
@@ -260,6 +245,77 @@ export function axisRangeOverrides(ws, { chartType, slots }) {
 	if (axis.max !== undefined) overrides.value_scale_max = String(axis.max);
 	issues.push(issue(ws, 'info', 'chart.axis-range', `The value axis keeps Tableau's fixed range (${axis.min ?? 'automatic'} to ${axis.max ?? 'automatic'})`));
 	return { overrides, issues };
+}
+
+const SCATTERS = /^badge_(xyscatterplot_basic|xybubble)$/;
+const CATEGORY_SLOTS = new Set(['ITEM', 'GROUP1', 'GROUP2']);
+const shelfPills = (ws, scope) => (scope === 'cols' ? ws.colPills : ws.rowPills) ?? [];
+const sameAxisPill = (ws, a, b) => a === b || measureKey(pillFor(ws, a)) === measureKey(pillFor(ws, b));
+
+function axisTitle(ws, ir, pillIds, scope) {
+	const shelf = shelfPills(ws, scope);
+	const measureValues = shelf.find((id) => classifyPill(ws, ir, id).kind === 'measure-values');
+	if (!measureValues && !pillIds.some((id) => shelf.some((s) => sameAxisPill(ws, s, id)))) return undefined;
+	const onAxis = (x) => x.scope === scope && !x.axis && (pillIds.some((id) => sameAxisPill(ws, x.pillId, id)) || (measureValues !== undefined && classifyPill(ws, ir, x.pillId).kind === 'measure-values'));
+	if ((ws.hiddenAxes ?? []).some(onAxis)) return undefined;
+	const custom = (ws.axisTitles ?? []).find(onAxis);
+	if (custom) return custom.title.trim() || undefined;
+	if (measureValues) return 'Value';
+	return [...new Set(pillIds.map((id) => pillLabel(ws, ir, id)))].join(' & ');
+}
+
+/**
+ * title_y: the value axis's Tableau title. title_x: the field labels of the ITEM and GROUP levels in shelf order, or a
+ * continuous level's axis title. A blank title, a hidden axis or hidden field labels give none.
+ */
+export function axisTitleOverrides(ws, ir, { chartType, slots }) {
+	const overrides = {};
+	const issues = [];
+	if (!SUPPORT.axis_x.has(chartType)) return { overrides, issues };
+	if (SCATTERS.test(chartType)) {
+		const x = slots.find((s) => s.mapping === 'XTIME');
+		const y = slots.find((s) => s.mapping === 'VALUE');
+		const titleX = x && axisTitle(ws, ir, [x.pillId], 'cols');
+		const titleY = y && axisTitle(ws, ir, [y.pillId], 'rows');
+		if (titleX) overrides.title_x = titleX;
+		if (titleY) overrides.title_y = titleY;
+		return { overrides, issues };
+	}
+	const horizontal = /_horiz_/.test(chartType);
+	const levels = slots.filter((s) => CATEGORY_SLOTS.has(s.mapping) && s.role === 'dim').flatMap((s) => (s.derived?.type === 'concat' ? s.derived.pillIds : [s.pillId]));
+	const onShelf = (scope) => shelfPills(ws, scope).filter((id) => levels.some((l) => sameFieldPill(ws, id, l)));
+	let categoryScope = horizontal ? 'rows' : 'cols';
+	if (!onShelf(categoryScope).length && onShelf(categoryScope === 'cols' ? 'rows' : 'cols').length) categoryScope = categoryScope === 'cols' ? 'rows' : 'cols';
+	const valueScope = categoryScope === 'cols' ? 'rows' : 'cols';
+	if (SUPPORT.axis_y.has(chartType)) {
+		const value = slots.find((s) => s.mapping === 'VALUE' && s.role !== 'dim');
+		const pillIds = value ? [value.pillId] : slots.filter((s) => s.mapping === 'SERIES' && s.role !== 'dim').map((s) => s.pillId);
+		const title = pillIds.length ? axisTitle(ws, ir, pillIds, valueScope) : undefined;
+		if (title) overrides.title_y = title;
+	}
+	const labels = [];
+	let headers = false;
+	for (const id of onShelf(categoryScope)) {
+		const pill = pillFor(ws, id);
+		if (pill.continuous) {
+			const title = axisTitle(ws, ir, [id], categoryScope);
+			if (title) labels.push(title);
+		} else if (!(ws.hiddenFieldLabels ?? []).includes(categoryScope) && !(ws.hiddenHeaders ?? []).includes(id)) {
+			labels.push(pillLabel(ws, ir, id));
+			headers = true;
+		}
+	}
+	if (labels.length) overrides.title_x = [...new Set(labels)].join(' / ');
+	if (headers && !horizontal && categoryScope === 'cols') {
+		issues.push(issue(ws, 'info', 'chart.axis-title-position', `Tableau shows the column field labels (${overrides.title_x}) above the chart; Domo draws the category title under the axis`));
+	}
+	return { overrides, issues };
+}
+
+function sameFieldPill(ws, a, b) {
+	const p = pillFor(ws, a);
+	const q = pillFor(ws, b);
+	return p.datasourceId === q.datasourceId && p.fieldId === q.fieldId;
 }
 
 const SORTED_STACKS = /^badge_(vert|horiz)_(stackedbar|100pct)$/;

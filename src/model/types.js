@@ -15,9 +15,10 @@
 // other panes' color pills (paneColors). 13: filter scope (filter-group, shared-view filters) and set filters that keep
 // the set's members (bare, memberLevel). 14: datasource hierarchies (drill paths). 15: worksheet window filter cards
 // (quickFilters). 16: table shading and row dividers (tableStyle). 17: fiscal year start month of datasources and date
-// fields (fiscalYearStart). 18: worksheet window filter, parameter and legend cards (windowCards). Convert warns on an
-// older ir.json.
-export const IR_VERSION = 18;
+// fields (fiscalYearStart). 18: worksheet window filter, parameter and legend cards (windowCards). 19: axis titles, hidden
+// axes and field labels, tooltip mode (axisTitles, hiddenAxes, hiddenFieldLabels, tooltipMode), color gradient center,
+// steps, palette type and totals (ColorEncodingIR). Convert warns on an older ir.json.
+export const IR_VERSION = 19;
 export const PLAN_VERSION = 1;
 
 /* ------------------------------------------------------------------ */
@@ -353,6 +354,13 @@ export const PLAN_VERSION = 1;
  * @property {{ pillId: string, min?: number, max?: number }[]} [axes]  Axes with a fixed range (axis style-rule `space`
  *                                              encoding, range-type fixed, fixedmin or fixedmax); absent in IR extracted
  *                                              before it was read
+ * @property {{ pillId: string, scope: 'rows'|'cols', axis: number, title: string }[]} [axisTitles]  Custom axis titles (axis
+ *                                              style-rule `title`; axis 1 is a dual axis's second; '' blanks the title, IR 19)
+ * @property {{ pillId: string, scope: 'rows'|'cols', axis: number }[]} [hiddenAxes]  Axes Tableau does not show (axis
+ *                                              style-rule `display` false, IR 19)
+ * @property {('rows'|'cols')[]} [hiddenFieldLabels]  Shelves whose field labels are hidden (worksheet style-rule
+ *                                              `display-field-labels` false, IR 19)
+ * @property {'none'|'sticky'} [tooltipMode]    `<tooltip-style tooltip-mode>`: none turns the tooltip off (IR 19)
  * @property {Record<string, string>} [filterTitles]  Filter field (pill id) -> the title its quick filters show
  *                                              (quick-filter style-rule `title`)
  * @property {{ pillId: string, mode?: string }[]} [quickFilters]  The filter cards the worksheet's own window shows
@@ -381,6 +389,10 @@ export const PLAN_VERSION = 1;
  * @property {number} [truncated]               Number of members before the cut
  * @property {boolean} [multi]                  Some maps color tuples (`<multibucket>`), which are left out
  * @property {string[]} [colors]                custom-interpolated: the gradient's colors
+ * @property {string} [paletteType]             The gradient palette's type: ordered-diverging, ordered-sequential, regular (IR 19)
+ * @property {number} [center]                  Diverging center value (`@center`, IR 19)
+ * @property {number} [steps]                   Stepped color count (`@num-steps`, IR 19); absent for a continuous gradient
+ * @property {boolean} [includeTotals]          Totals are colored too (`@include-totals`, IR 19)
  *
  * @typedef {Object} BlendIR
  * @property {string} primary                   Original primary datasource id

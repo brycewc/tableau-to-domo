@@ -2,20 +2,21 @@ import { ref } from '../util/refs.js';
 import { slugify } from '../util/ids.js';
 import { stripBrackets } from '../model/naming.js';
 import { resolveTitle } from './titles.js';
-import { inferChart, pillFor, findField, markPanes, KPI_TYPES, MEASURE_SLOTS } from './chart-types.js';
+import { inferChart, pillFor, findField, markPanes, isPctTotal, KPI_TYPES, MEASURE_SLOTS } from './chart-types.js';
 import { MAX_SPLIT_CARDS, SPLIT_MEMBER } from './split.js';
 import { CALENDAR_INTERVALS, toCardFilters, toQuickFilterControls, bindingExpression, datePartFormula, pillWindowItem, refOf, exceedsSlicerLimit, memberCondition, filterRef, filterDataType, dashboardFilterScopes } from './filters.js';
 import { hiddenScope, tableCalcAlong } from './hidden-members.js';
 import { fiscalStartName } from './fiscal.js';
 import { topRankReason } from './top-rank.js';
 import { quickCalcType, quickTableCalcSql, tableCalcAddressing } from './calc/tablecalc.js';
-import { axisRangeOverrides, legendOverrides, legendPlacements, markTextOverrides, negativeNumberOverrides, stackSortOverrides } from './chart-options.js';
-import { cardColorRules } from './colors.js';
+import { axisRangeOverrides, axisTitleOverrides, legendOverrides, legendPlacements, markTextOverrides, negativeNumberOverrides, stackSortOverrides } from './chart-options.js';
+import { cardColorRules, heatmapOverrides } from './colors.js';
 import { isTableChart, planDrillPath } from './drill.js';
 import { domoNumberFormat, fieldColumnFormat, fieldNumberFormat, negativeStyle } from './number-format.js';
 import { hyperlinkFormula, nativeLinkFormat, parseUrlToken, pickLinkColumn, templateParts, urlActionSheets, withScheme } from './url-columns.js';
 import { NULL_VALUE, conditionAggregates, quoteString } from './calc/sql.js';
 import { opaqueHex } from './app-layout.js';
+import { fixedAt } from './warehouse-sorts.js';
 
 /**
  * @typedef {import('../model/types.js').WorkbookIR} WorkbookIR
@@ -318,6 +319,8 @@ class CardBuilder {
 		this.paneConditions = new Map();
 		this.combinedFormulas = new Set();
 		this.negativeStyles = new Map();
+		this.unconvertedCalcs = new Set();
+		this.spreadColumns = [];
 	}
 
 	/** A plain aggregate of a row-level field, which a member condition can go inside. */
@@ -485,6 +488,7 @@ class CardBuilder {
 		// 'Calculation' is the compute-using of a table calc formula, which its beast mode already applies.
 		const quickTableCalc = Boolean(pill.tableCalc && pill.tableCalc.type !== 'Calculation');
 		const quickCalc = quickTableCalc && !pctChart;
+		const calcUnconverted = quickTableCalc && !(pctChart && m.mapping === 'VALUE' && isPctTotal(pill));
 		if (agg.cardFormula) {
 			const expr = binding.kind === 'formula' && binding.aggregated ? undefined : bindingExpression(binding);
 			if (!expr) {
@@ -497,7 +501,7 @@ class CardBuilder {
 				if (calc) return calc;
 			}
 			const id = this.addFormula({ name: `${agg.cardFormula.label} of ${name}`, formula, dataType: 'numeric', aggregated: true });
-			return { ref: { column: id, formulaId: id }, calcDropped: quickTableCalc };
+			return { ref: { column: id, formulaId: id }, calcDropped: quickTableCalc, calcUnconverted };
 		}
 		if (pill.tableCalc?.type === 'PctTotal' && !pctChart) {
 			const pct = this.percentOfTotal(pill, binding, agg.aggregation, name);
@@ -507,7 +511,7 @@ class CardBuilder {
 			const calc = this.tableCalcRef(m, pill, aggregateExpression(binding, agg.aggregation), name);
 			if (calc) return calc;
 		}
-		return { ref: refOf(binding), aggregation: agg.aggregation, calcDropped: quickTableCalc };
+		return { ref: refOf(binding), aggregation: agg.aggregation, calcDropped: quickTableCalc, calcUnconverted };
 	}
 
 	/** The pill's quick table calc as a window formula over `base`, or undefined after warning that it was not converted. */
@@ -636,6 +640,10 @@ class CardBuilder {
 		}
 		const built = treatAsMeasure ? this.measureRef(m, pill, binding) : this.dimensionRef(m, pill, binding);
 		if (!built) return;
+		if (built.calcUnconverted) {
+			this.unconvertedCalcs.add(m.pillId);
+			if (/^EXTRAINFO\d$/.test(m.mapping)) return;
+		}
 		const column = { ...built.ref, mapping: m.mapping };
 		if (built.aggregation) column.aggregation = built.aggregation;
 		const alias = (treatAsMeasure && this.measureNameAlias(pill)) || columnAlias(built.ref, binding);
@@ -650,7 +658,7 @@ class CardBuilder {
 		this.slots.push({ pillId: m.pillId, role: m.role, column });
 		const aggregatedFormula = column.formulaId && (this.aggregatedFormulas.has(column.formulaId) || binding.aggregated);
 		const grouped = !treatAsMeasure;
-		this.pillRefs.set(m.pillId, { ref: built.ref, aggregation: built.aggregation, grouped, raw: built.raw, aggregated: Boolean(built.aggregation || aggregatedFormula) });
+		if (!this.pillRefs.get(m.pillId)?.combined) this.pillRefs.set(m.pillId, { ref: built.ref, aggregation: built.aggregation, grouped, raw: built.raw, aggregated: Boolean(built.aggregation || aggregatedFormula) });
 		if (grouped) this.pushGroup(built.ref);
 		META.set(column, { raw: Boolean(built.raw), aggregated: Boolean(built.aggregation || aggregatedFormula) });
 	}
@@ -890,6 +898,12 @@ function itemFirst(builder, inference, sorts) {
 	const seriesRef = series && builder.pillRefs.get(series.pillId)?.ref;
 	const onAxisColumn = own ? refKey(own) === refKey(known.ref) : !natural;
 	const onSeriesColumn = (e) => Boolean(seriesRef) && refKey(e) === refKey(seriesRef);
+	const groups = ['GROUP2', 'GROUP1'].map((g) => inference.mappings.find((m) => m.mapping === g)).filter((m) => m && builder.pillRefs.get(m.pillId)?.grouped);
+	if (groups.length) {
+		const unsortedSeries = seriesChart && seriesRef && !sorts.byPill.has(series.pillId) && !seriesRef.calendar && !builder.stackSorted;
+		const result = unsortedSeries ? [axisEntry(), stacked({ ...seriesRef, order: 'ASCENDING' }), ...rest] : [axisEntry(), ...rest.map((e) => (isSeriesKey(e) ? stacked(e) : e))];
+		return trellisOrder(builder, groups, sorts, result);
+	}
 	// Tableau lists unsorted series members in natural order; with the axis sort alone Domo keeps the query's row order.
 	if (seriesChart && seriesRef && !sorts.byPill.has(series.pillId) && !seriesRef.calendar && !builder.stackSorted) {
 		const key = seriesNaturalKey(builder, series.pillId, seriesRef);
@@ -902,6 +916,47 @@ function itemFirst(builder, inference, sorts) {
 	if (natural && sorts.ranks?.has(rest[0]) && rest.length === 1) return [stacked({ ...rest[0] }), axisEntry()];
 	builder.info('card.sort-order', 'The series sort is listed before the category axis sort: Domo orders the series by the first sort of a one-series card and the axis by the second');
 	return [rest[0], axisEntry(), ...rest.slice(1)];
+}
+
+/** A trellis whose innermost level has no column draws its next level as the axis. */
+function promoteTrellisGroups(builder, inference) {
+	if (builder.columns.some((c) => c.mapping === 'ITEM')) return;
+	const groups = ['GROUP1', 'GROUP2'].map((g) => builder.columns.find((c) => c.mapping === g)).filter(Boolean);
+	if (!groups.length) return;
+	const pillOf = new Map(builder.slots.map((s) => [s.column, s.pillId]));
+	const renamed = new Map();
+	groups.forEach((c, i) => {
+		c.mapping = i ? 'GROUP1' : 'ITEM';
+		renamed.set(pillOf.get(c), c.mapping);
+	});
+	builder.columns.splice(builder.columns.indexOf(groups[0]), 1);
+	builder.columns.unshift(groups[0]);
+	inference.mappings = inference.mappings.filter((m) => m.mapping !== 'ITEM').map((m) => (/^GROUP/.test(m.mapping) && renamed.has(m.pillId) ? { ...m, mapping: renamed.get(m.pillId) } : m));
+}
+
+/** Phoenix draws a trellis band per run of rows, so the outer group levels sort first: GROUP2, GROUP1, then the rest. */
+function trellisOrder(builder, groups, sorts, entries) {
+	const groupSorts = groups.map((m) => sorts.byPill.get(m.pillId)).filter(Boolean);
+	const refs = groups.map((m) => builder.pillRefs.get(m.pillId).ref);
+	const keys = groups.map((m) => {
+		const known = builder.pillRefs.get(m.pillId);
+		const sorted = sorts.byPill.get(m.pillId);
+		const grain = sorted && itemGrainSort(builder, m.pillId, known, sorted);
+		if (grain && !isValueSort(builder, grain)) return grain;
+		if (grain) {
+			// A sort equal to the VALUE column orders rows by their own values, which would split the group's band.
+			const sort = (builder.ws.sorts ?? []).find((s) => s.pillId === m.pillId && s.kind === 'computed' && s.using);
+			const id = sort && builder.options.useWindowFunctions && totalOrderKey(builder, m.pillId, sort.using, [groupExpression(builder, m.pillId)]);
+			if (id) return { column: id, formulaId: id, order: grain.order };
+			builder.info('card.sort', `${builder.fieldName(pillFor(builder.ws, m.pillId), builder.resolve(m.pillId).binding)} is ordered by name, not by its total: its trellis band needs a total-order key, which ${builder.options.useWindowFunctions ? 'could not be built' : 'needs window functions'}`);
+		}
+		const combined = builder.combinedFormulas.has(known.ref.formulaId) && builder.formulas.find((f) => f.id === known.ref.formulaId);
+		const natural = combined ? { name: `${combined.name} (natural order)`, formula: naturalOrderKey(combined.formula) } : seriesNaturalKey(builder, m.pillId, known.ref);
+		if (!natural) return { ...known.ref, order: 'ASCENDING' };
+		const id = builder.addFormula({ ...natural, dataType: 'string', aggregated: true });
+		return { column: id, formulaId: id, order: 'ASCENDING' };
+	});
+	return [...keys, ...entries.filter((e) => !groupSorts.includes(e) && !refs.some((r) => refKey(r) === refKey(e)))];
 }
 
 function isValueSort(builder, entry) {
@@ -934,9 +989,10 @@ function itemGrainSort(builder, pillId, known, entry) {
 	if (refKey(entry) !== refKey(value) || (entry.aggregation ?? '') !== (value.aggregation ?? '')) return entry;
 	const formula = value.formulaId && builder.formulas.find((f) => f.id === value.formulaId);
 	const sql = formula ? (formula.aggregated ? formula.formula : undefined) : value.aggregation && COLUMN_AGGREGATE_SQL[value.aggregation]?.(`\`${value.column}\``);
-	if (!sql) return entry;
+	const total = sql && fixedAt(sql, [`\`${known.ref.column}\``]);
+	if (!total) return entry;
 	const { pill, binding } = builder.resolve(pillId);
-	const id = builder.addFormula({ name: `${builder.fieldName(pill, binding)} (sort by ${formula ? formula.name : value.column})`, formula: `MAX(${sql} FIXED (BY \`${known.ref.column}\`))`, dataType: 'numeric', aggregated: true });
+	const id = builder.addFormula({ name: `${builder.fieldName(pill, binding)} (sort by ${formula ? formula.name : value.column})`, formula: `MAX(${total})`, dataType: 'numeric', aggregated: true });
 	return { column: id, formulaId: id, order: entry.order };
 }
 
@@ -1090,7 +1146,7 @@ const NATURAL_DIGITS = 10;
 
 /**
  * Sort key that orders text with numbers in it as Tableau draws such an axis ("2023 P7" before "2023 P10"): every digit
- * run zero-padded to NATURAL_DIGITS. Domo's REGEXP_REPLACE takes `$0`/`$1`.
+ * run zero-padded to NATURAL_DIGITS. Domo-stored data takes `$0`/`$1`; warehouseBackreferences rewrites them for Snowflake.
  * `perGroup`: the key of MIN(expr), one pattern match per group, for a card grouped by expr itself.
  */
 export function naturalOrderKey(expr, { perGroup = false } = {}) {
@@ -1301,8 +1357,20 @@ function spreadMembers(builder, ws, spread) {
 	const total = ws.totals?.cols ? [{ ...column, alias: 'Grand Total' }] : [];
 	for (const c of total) META.set(c, { aggregated: true });
 	builder.columns.splice(at, 1, ...spreadColumns, ...total);
+	builder.spreadColumns = spreadColumns;
 	if (total.length) slot.column = total[0];
 	else builder.slots.splice(builder.slots.indexOf(slot), 1);
+}
+
+/** A spread measure is colored on its member columns, not its Grand Total. */
+function heatmapColumns(builder, inference) {
+	const pillIds = inference.heatmap?.pillIds ?? [];
+	if (!pillIds.length) return {};
+	const spread = inference.spread && pillIds.includes(inference.spread.measure) && builder.spreadColumns.length ? inference.spread.measure : undefined;
+	const own = builder.slots.filter((s) => s.role !== 'dim' && s.pillId !== spread && pillIds.includes(s.pillId)).map((s) => s.column);
+	const numbers = [...(spread ? builder.spreadColumns : []), ...own].map((c) => builder.columns.indexOf(c) + 1).filter((n) => n > 0);
+	const encoding = pillIds.includes(builder.ws.color?.pillId) ? builder.ws.color : undefined;
+	return numbers.length ? heatmapOverrides(encoding, numbers) : {};
 }
 
 const NUMBER_TYPES = /^(long|double|decimal|integer|real)$/i;
@@ -1548,6 +1616,7 @@ export function planCard(ws, ir, bindings, { key, datasetKey, filterZones = new 
 	if (inference.warnings.some((w) => w.severity !== 'info')) builder.approximate = true;
 	const paneHidden = paneHides(ws, bindings, builder);
 	for (const m of inference.mappings) builder.add(m);
+	promoteTrellisGroups(builder, inference);
 	for (const pillId of inference.detail ?? []) builder.addDetail(pillId);
 	if ((inference.detail ?? []).length) builder.info('chart.detail', 'Detail-shelf dimensions added to the card grouping');
 	for (const pillId of inference.sortOnly ?? []) builder.addSortOnly(pillId);
@@ -1683,17 +1752,18 @@ export function planCard(ws, ir, bindings, { key, datasetKey, filterZones = new 
 	if (fiscal.issue) builder.warn('card.fiscal-mixed', fiscal.issue);
 	if (fiscal.startMonth) subscription.fiscal = true;
 	const slots = builder.slots.map((s) => ({ pillId: s.pillId, mapping: s.column.mapping, role: s.role, ...(s.derived ? { derived: s.derived } : {}) }));
-	const markText = markTextOverrides(ws, ir, { chartType, family: inference.family, slots });
+	const markText = markTextOverrides(ws, ir, { chartType, family: inference.family, slots, unconverted: [...builder.unconvertedCalcs] });
 	const legendPosition = legendOverrides(ws, legend, { chartType, slots });
 	const axisRange = axisRangeOverrides(ws, { chartType, slots });
 	const stackSort = stackSortOverrides(ws, { chartType, slots });
-	builder.issues.push(...markText.issues, ...legendPosition.issues, ...axisRange.issues, ...stackSort.issues);
-	let overrides = { ...legendPosition.overrides, ...markText.overrides, ...axisRange.overrides, ...stackSort.overrides };
+	const axisTitles = axisTitleOverrides(ws, ir, { chartType, slots });
+	builder.issues.push(...markText.issues, ...legendPosition.issues, ...axisRange.issues, ...stackSort.issues, ...axisTitles.issues);
+	let overrides = { ...legendPosition.overrides, ...markText.overrides, ...axisRange.overrides, ...stackSort.overrides, ...axisTitles.overrides };
 	if (chartType === 'badge_pivot_table') {
 		overrides = pivotTotals(ws, builder.slots);
 		const columnSort = pivotHeaderSorts(builder, ws);
 		if (columnSort) overrides.column_sort = columnSort;
-	} else if (inference.family === 'crosstab') overrides = crosstabTotals(builder);
+	} else if (inference.family === 'crosstab') overrides = { ...crosstabTotals(builder), ...heatmapColumns(builder, inference) };
 	else if (inference.family === 'table' && ws.totals?.rows) Object.assign(overrides, crosstabTotals(builder));
 	Object.assign(overrides, totalsStyleOverrides({ ...ir.style?.table, ...ws.tableStyle }, overrides));
 	const negatives = negativeNumberOverrides(ws, { chartType, styles: [...builder.negativeStyles.values()] });
@@ -1701,6 +1771,7 @@ export function planCard(ws, ir, bindings, { key, datasetKey, filterZones = new 
 	Object.assign(overrides, negatives.overrides);
 	if (chartType === 'badge_basic_table' && measureNamesAsRows(ws)) overrides.transposed = 'true';
 	Object.assign(overrides, inference.overrides);
+	if (!builder.columns.some((c) => /^GROUP\d$/.test(c.mapping))) delete overrides.show_as_trellis;
 	const formulas = inference.family === 'crosstab' ? usedFormulas(builder.formulas, subscription, controls) : builder.formulas;
 	const colors = cardColorRules(ws, { family: TABLE_CHARTS.has(chartType) ? 'table' : inference.family, slots: builder.slots, dataSourceId: ref('dataset', datasetKey) });
 	const split = inference.split ? splitSpec(builder, ws, inference.split.pillId) : undefined;

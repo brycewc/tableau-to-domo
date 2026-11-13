@@ -33,7 +33,7 @@ test('vertical bar: exact card update body', () => {
 			description: '',
 			dynamicTitle: { text: [{ type: 'TEXT', text: 'Sales by Category' }] },
 			chartVersion: '12',
-			charts: { main: { component: 'main', chartType: 'badge_vert_bar', overrides: {}, goal: null } },
+			charts: { main: { component: 'main', chartType: 'badge_vert_bar', overrides: { hover_text: 'Category: %_CATEGORY_NAME\nSales: %_VALUE', title_x: 'Category', title_y: 'Sales' }, goal: null } },
 			subscriptions: {
 				main: {
 					name: 'main',
@@ -166,14 +166,14 @@ test('gantt end date is a DATE_ADD card formula', () => {
 	assert.equal(def.formulas.card[0].formula, 'DATE_ADD(`Order Date`, INTERVAL `Duration` DAY)');
 	assert.deepEqual(
 		main.columns.map((c) => c.mapping),
-		['ITEM', 'START_DATE', 'END_DATE']
+		['ITEM', 'START_DATE', 'END_DATE', 'EXTRAINFO1']
 	);
 	assert.deepEqual(main.columns[1], { column: 'Order Date', mapping: 'START_DATE' });
 });
 
-test('detail dimensions are added to groupBy only', () => {
+test('detail dimensions are added to groupBy; the default tooltip shows them through an EXTRAINFO column', () => {
 	const { main } = one({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { detail: [p('none', 'Segment')] } });
-	assert.equal(main.columns.length, 2);
+	assert.deepEqual(main.columns.slice(2), [{ column: 'Segment', mapping: 'EXTRAINFO1' }]);
 	assert.deepEqual(main.groupBy, [{ column: 'Category' }, { column: 'Segment' }]);
 });
 
@@ -854,6 +854,70 @@ test('a crosstab listing records (four or more row headers) is a Mega Table with
 	assert.equal(planCards(workbook({ worksheets: [small] }), makeBindings(), { options: {} }).cards[0].chartType, 'badge_pivot_table', 'a summary crosstab stays a pivot');
 });
 
+test('a highlight table with several headers is a pivot whose Difference is a window over the other headers', () => {
+	const SEGMENT = p('none', 'Segment');
+	const YEAR = p('none', 'Fiscal Year', 'ok');
+	const DIFF = p('diff:sum', 'Sales', 'qk');
+	const ws = sheet({ name: 'By End User', rows: `${REGION} / ${CATEGORY}`, cols: `${YEAR} / ${SEGMENT}`, mark: 'Square', enc: { color: [DIFF], text: [SALES, DIFF] }, sorts: [{ pillId: YEAR, kind: 'natural', direction: 'DESC' }] });
+	ws.pills[DIFF].tableCalc = { type: 'Diff', orderingType: 'Field', orderFields: [`[${DS}].[Fiscal Year]`] };
+	const { cards, issues } = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: { useWindowFunctions: true } });
+	const def = cards[0].body.definition;
+	assert.equal(cards[0].chartType, 'badge_pivot_table');
+	assert.deepEqual(def.subscriptions.main.columns.map((c) => c.mapping), ['ROW', 'ROW', 'COLUMN', 'COLUMN', 'VALUE', 'VALUE']);
+	const diff = def.formulas.card.find((f) => f.id === def.subscriptions.main.columns.at(-1).formulaId);
+	assert.equal(diff.formula, 'SUM(`Sales`) - LAG(SUM(`Sales`), 1) OVER (PARTITION BY `Region`, `Category`, `Segment` ORDER BY `Fiscal Year` DESC)');
+	assert.ok(issues.some((i) => i.code === 'card.table-calc' && i.severity === 'info' && /converted to a window function/.test(i.message)));
+});
+
+test('a Mega Table crosstab colored by its value gets heatmap columns on that column, or on the spread member columns', () => {
+	const SEGMENT = p('none', 'Segment');
+	const CUSTOMER = p('none', 'Customer');
+	const SUB = p('none', 'Sub-Category');
+	const color = { pillId: SALES, type: 'custom-interpolated', colors: ['#f7fbff', '#08306b'], paletteType: 'ordered-sequential' };
+	const ws = sheet({ name: 'Listing', rows: `(${REGION} / ${CATEGORY} / ${SUB} / ${CUSTOMER})`, cols: SEGMENT, mark: 'Square', enc: { color: [SALES], text: [SALES] }, color });
+	const listing = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} }).cards[0].body.definition;
+	assert.deepEqual(listing.subscriptions.main.columns.map((c) => c.column), ['Region', 'Category', 'Sub-Category', 'Customer', 'Segment', 'Sales']);
+	assert.deepEqual([listing.charts.main.overrides.use_heatmap_colors, listing.charts.main.overrides.heatmap_columns, listing.charts.main.overrides.range_by_column], ['true', '6', 'false']);
+
+	const spread = sheet({ name: 'Spread', rows: `${REGION} / ${CATEGORY}`, cols: SEGMENT, mark: 'Square', enc: { color: [SALES], text: [SALES] }, color: { ...color, paletteType: 'ordered-diverging', center: 0 }, sorts: [{ pillId: SEGMENT, kind: 'manual', direction: 'ASC', order: ['Corporate', 'Consumer', 'Home Office'] }] });
+	spread.totals = { cols: true };
+	const def = planCards(workbook({ worksheets: [spread] }), makeBindings(), { options: {} }).cards[0].body.definition;
+	const names = def.subscriptions.main.columns.map((c) => c.alias ?? def.formulas.card.find((f) => f.id === c.formulaId)?.name ?? c.column);
+	assert.deepEqual(names, ['Region', 'Category', 'Corporate', 'Consumer', 'Home Office', 'Grand Total']);
+	const o = def.charts.main.overrides;
+	assert.deepEqual([o.heatmap_columns, o.show_diverging, o.midpoint_value_type], ['3-5', 'true', 'Zero'], 'the member columns, not the Grand Total');
+});
+
+test('a tooltip or label table calc the card cannot convert gets no extra-info column and drops its lines', () => {
+	const RUN = p('cum:sum', 'Sales', 'qk');
+	const ws = sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { tooltip: [RUN] } });
+	ws.pills[RUN].tableCalc = { type: 'CumTotal', orderingType: 'Field', orderFields: [`[${DS}].[Region]`] };
+	Object.assign(ws.panes[0], { tooltip: `<${CATEGORY}>: <${SALES}>\nRunning: <${RUN}> so far`, showLabels: true, label: `<${SALES}>\n<${RUN}>` });
+	const { cards, issues } = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: { useWindowFunctions: true } });
+	const def = cards[0].body.definition;
+	assert.deepEqual(def.subscriptions.main.columns.map((c) => c.mapping), ['ITEM', 'VALUE']);
+	assert.equal(def.charts.main.overrides.hover_text, '%_CATEGORY_NAME: %_VALUE');
+	assert.equal(def.charts.main.overrides.datalabel_text, '%_VALUE');
+	assert.ok(issues.some((i) => i.code === 'card.table-calc' && i.severity === 'warning' && /CumTotal on Sales is not converted/.test(i.message)));
+	assert.ok(issues.some((i) => i.code === 'chart.mark-text' && /Running Sum of Sales/.test(i.message)));
+
+	const value = sheet({ cols: CATEGORY, rows: RUN, mark: 'Bar' });
+	value.pills[RUN].tableCalc = { type: 'CumTotal', orderingType: 'Field', orderFields: [`[${DS}].[Region]`] };
+	Object.assign(value.panes[0], { showLabels: true, label: `Sales <${SALES}>\nRunning <${RUN}>` });
+	const valueDef = planCards(workbook({ worksheets: [value] }), makeBindings(), { options: { useWindowFunctions: true } }).cards[0].body.definition;
+	assert.equal(valueDef.charts.main.overrides.datalabel_text, 'Sales %_TOOLTIP1', 'the base line only, without the fallen-back value appended');
+});
+
+test("a 100% chart's percent of total is the percent the chart draws, not an unconverted calc", () => {
+	const PCT = p('pcto:cnt', 'Customer', 'qk');
+	const ws = sheet({ rows: `${REGION} * ${PCT}`, cols: CATEGORY, enc: { color: [REGION], text: [PCT] } });
+	ws.pills[PCT].tableCalc = { type: 'PctTotal', orderingType: 'Field', orderFields: [`[${DS}].[Region]`], attrs: { prefix: 'pcto' } };
+	Object.assign(ws.panes[0], { showLabels: true, label: `<${PCT}>` });
+	const [card] = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} }).cards;
+	assert.equal(card.chartType, 'badge_vert_100pct');
+	assert.equal(card.body.definition.charts.main.overrides.datalabel_text, '%_PERCENT_OF_CATEGORY');
+});
+
 test('an integer dimension has no thousands separator, as Tableau draws it, unless its Tableau format has one', () => {
 	const { main } = one({ cols: p('none', 'Fiscal Year', 'ok'), rows: SALES, mark: 'Bar' });
 	assert.deepEqual(main.columns[0], { column: 'Fiscal Year', mapping: 'ITEM', format: PLAIN_INTEGER_FORMAT });
@@ -904,7 +968,7 @@ test("a measure takes its field's default format, except for a count or a table 
 		return out;
 	};
 	const columns = (ws) => planCards(ir(ws), makeBindings(), { options: {} }).cards[0].body.definition.subscriptions.main.columns;
-	assert.deepEqual(columns(sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar' }))[1].format, { type: 'currency', format: '###,###.0', commas: true, percentMultiplied: true, precision: 1, currency: '$', abbreviate: true }, 'millions with one decimal');
+	assert.deepEqual(columns(sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar' }))[1].format, { type: 'currency', format: '###,###.00', commas: true, percentMultiplied: true, precision: 2, currency: '$', abbreviate: true }, 'millions with at least two decimals');
 	assert.equal(columns(sheet({ cols: CATEGORY, rows: p('cnt', 'Sales', 'qk'), mark: 'Bar' }))[1].format, undefined, 'a count is not currency');
 	const pct = sheet({ cols: CATEGORY, rows: p('pcto:sum', 'Sales', 'qk'), mark: 'Bar' });
 	pct.numberFormats = { [p('pcto:sum', 'Sales', 'qk')]: 'p0.0%' };
@@ -1073,7 +1137,9 @@ test('Channel Growth: period on the axis, the color dimension as series, Tableau
 		hover_text: 'Category: %_CATEGORY_NAME\nRegion: %_SERIES_NAME\nCount : %_VALUE',
 		datalabel_text: '%_PERCENT_OF_CATEGORY',
 		datalabel_position: 'Center',
-		datalabel_fnt_clr: 'Complimentary'
+		datalabel_fnt_clr: 'Complimentary',
+		title_x: 'Category',
+		title_y: '% of Total Count of Customer'
 	});
 });
 
@@ -1238,13 +1304,13 @@ test('a combined category is one null-safe CONCAT beast mode on ITEM, sorted by 
 	const STORE = p('none', 'Store Number');
 	const CUSTOMER = p('none', 'Customer');
 	const SEGMENT = p('none', 'Segment');
-	const r = one({ rows: `${STORE} / ${CUSTOMER}`, cols: SALES, mark: 'Bar', enc: { color: [SEGMENT] }, sorts: [{ pillId: STORE, kind: 'computed', direction: 'DESC', using: SALES }] });
-	assert.equal(r.card.chartType, 'badge_horiz_stackedbar');
+	const r = one({ rows: `${STORE} / ${CUSTOMER} / ${SEGMENT}`, cols: SALES, mark: 'Bar', enc: { color: [SEGMENT] }, sorts: [{ pillId: STORE, kind: 'computed', direction: 'DESC', using: SALES }] });
+	assert.equal(r.card.chartType, 'badge_horiz_multibar');
 	assert.deepEqual(r.def.formulas.card.map((f) => [f.id, f.name, f.formula, f.dataType, f.aggregated]), [
 		['calculation_card_1', 'Store Number + Customer', "CONCAT(COALESCE(`Store Number`, ''), ' ', COALESCE(`Customer`, ''))", 'string', false]
 	]);
-	assert.deepEqual(r.main.columns.map((c) => [c.column, c.mapping]), [['calculation_card_1', 'ITEM'], ['Segment', 'SERIES'], ['Sales', 'VALUE']]);
-	assert.deepEqual(r.main.groupBy, [{ column: 'calculation_card_1', formulaId: 'calculation_card_1' }, { column: 'Segment' }]);
+	assert.deepEqual(r.main.columns.map((c) => [c.column, c.mapping]), [['calculation_card_1', 'ITEM'], ['Segment', 'SERIES'], ['Sales', 'VALUE'], ['Customer', 'EXTRAINFO1']]);
+	assert.deepEqual(r.main.groupBy, [{ column: 'calculation_card_1', formulaId: 'calculation_card_1' }, { column: 'Segment' }, { column: 'Customer' }]);
 	assert.deepEqual(r.main.orderBy, [{ column: 'Sales', aggregation: 'SUM', order: 'DESCENDING' }, { column: 'calculation_card_1', formulaId: 'calculation_card_1', order: 'ASCENDING' }]);
 	assert.ok(r.issues.some((i) => i.code === 'card.sort-order' && /largest segment/.test(i.message)));
 });
@@ -1254,37 +1320,75 @@ test('an unsorted combined category orders by the natural key of the whole formu
 	const SEGMENT = p('none', 'Segment');
 	const concat = "CONCAT(COALESCE(`Fiscal Year`, ''), ' ', COALESCE(`Category`, ''))";
 	const natural = (expr) => `MIN(REGEXP_REPLACE(REGEXP_REPLACE(${expr}, '[0-9]+', '0000000000$0'), '0*([0-9]{10})', '$1'))`;
-	const r = one({ cols: `${FY} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
-	assert.equal(r.card.chartType, 'badge_vert_stackedbar');
+	const r = one({ cols: `${FY} / ${CATEGORY} / ${SEGMENT}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
+	assert.equal(r.card.chartType, 'badge_vert_multibar');
 	assert.deepEqual(r.def.formulas.card.map((f) => [f.name, f.formula]), [['Fiscal Year + Category', concat], ['Segment (natural order)', NATURAL('Segment')], ['Fiscal Year + Category (natural order)', natural(concat)]]);
 	assert.deepEqual(r.main.orderBy.map((e) => e.column), ['calculation_card_2', 'calculation_card_3'], 'the series key takes the series slot, the combined key the category slot');
 
-	const sorted = one({ cols: `${FY} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] }, sorts: [{ pillId: CATEGORY, kind: 'alphabetic', direction: 'ASC' }, { pillId: FY, kind: 'alphabetic', direction: 'DESC' }] });
+	const sorted = one({ cols: `${FY} / ${CATEGORY} / ${SEGMENT}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] }, sorts: [{ pillId: CATEGORY, kind: 'alphabetic', direction: 'ASC' }, { pillId: FY, kind: 'alphabetic', direction: 'DESC' }] });
 	const keys = sorted.main.orderBy.map((e) => [sorted.def.formulas.card.find((f) => f.id === e.formulaId)?.name, e.order]);
 	assert.deepEqual(keys.filter(([name]) => /Fiscal Year \+ Category/.test(name ?? '')), [['Fiscal Year + Category (natural order)', 'DESCENDING']], 'the outer level sort wins, once');
 	assert.ok(sorted.issues.some((i) => i.code === 'card.sort-order' && /sort on Category is left out/.test(i.message)));
 });
 
-test('a part with no row-level expression leaves the combined category; tooltips name it by its outer level', () => {
+test('a trellis card sorts by its outer group, then by its axis, each by its natural-order key; a stacked series sorts last', () => {
+	const r = one({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar' });
+	assert.equal(r.card.chartType, 'badge_vert_bar');
+	assert.equal(r.def.charts.main.overrides.show_as_trellis, 'Trellis Categories');
+	const named = (res) => res.main.orderBy.map((e) => [res.def.formulas.card.find((f) => f.id === e.formulaId)?.name ?? e.column, e.order]);
+	assert.deepEqual(named(r), [['Region (natural order)', 'ASCENDING'], ['Category (natural order)', 'ASCENDING']]);
+	assert.deepEqual(r.main.groupBy, [{ column: 'Category' }, { column: 'Region' }]);
+
+	const stacked = one({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [p('none', 'Segment')] } });
+	assert.equal(stacked.card.chartType, 'badge_vert_stackedbar');
+	assert.deepEqual(named(stacked), [['Region (natural order)', 'ASCENDING'], ['Category (natural order)', 'ASCENDING'], ['Segment', 'ASCENDING']]);
+
+	const sorted = one({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', sorts: [{ pillId: REGION, kind: 'alphabetic', direction: 'DESC' }] });
+	assert.deepEqual(named(sorted), [['Region', 'DESCENDING'], ['Category (natural order)', 'ASCENDING']], "a group's own sort wins");
+
+	const byValue = [{ pillId: REGION, kind: 'computed', direction: 'DESC', using: SALES }];
+	const ratio = { rows: p('usr', 'Profit Ratio', 'qk'), cols: `${REGION} / ${CATEGORY}`, mark: 'Bar', sorts: [{ ...byValue[0], using: p('usr', 'Profit Ratio', 'qk') }] };
+	const ws = sheet(ratio);
+	const total = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: { useWindowFunctions: true } }).cards[0].body.definition;
+	const totalKey = total.formulas.card.find((f) => f.id === total.subscriptions.main.orderBy[0].formulaId);
+	assert.deepEqual([totalKey.name, totalKey.formula, total.subscriptions.main.orderBy[0].order], ['Region (total order)', 'SUM((SUM(`Profit`) / SUM(`Sales`))) OVER (PARTITION BY `Region`)', 'DESCENDING'], 'a group sorted by the VALUE column sorts by its total, keeping its band whole');
+	const grain = one({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', sorts: byValue });
+	assert.match(grain.def.formulas.card.find((f) => f.id === grain.main.orderBy[0].formulaId).formula, /^MAX\(SUM\(`Sales`\) FIXED \(BY `Region`\)\)$/);
+});
+
+test('a trellis level with no column leaves the next level the axis; tooltips name trellis groups by their macros', () => {
 	const SEGMENT = p('none', 'Segment');
 	const broken = one({ cols: `${REGION} / ${p('none', 'Broken')}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
 	assert.deepEqual(broken.main.columns.map((c) => [c.column, c.mapping]), [['Region', 'ITEM'], ['Segment', 'SERIES'], ['Sales', 'VALUE']]);
 	assert.ok(broken.issues.some((i) => i.code === 'card.unsupported-field'));
+	assert.equal(broken.def.charts.main.overrides.show_as_trellis, undefined);
 
 	const ws = sheet({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
 	ws.panes[0].tooltip = `Region: <${REGION}>\nCategory: <${CATEGORY}>\nSegment: <${SEGMENT}>\nSales: <${SALES}>`;
 	const { cards } = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} });
-	assert.equal(cards[0].body.definition.charts.main.overrides.hover_text, 'Region: %_CATEGORY_NAME\nSegment: %_SERIES_NAME\nSales: %_VALUE');
+	assert.equal(cards[0].body.definition.charts.main.overrides.hover_text, 'Region: %_CATEGORY2_NAME\nCategory: %_CATEGORY_NAME\nSegment: %_SERIES_NAME\nSales: %_VALUE');
+});
+
+test('a part with no row-level expression leaves the combined category; a tooltip names the other part through EXTRAINFO', () => {
+	const SEGMENT = p('none', 'Segment');
+	const broken = one({ cols: `${REGION} / ${p('none', 'Broken')} / ${SEGMENT}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
+	assert.deepEqual(broken.main.columns.map((c) => [c.column, c.mapping]).slice(0, 3), [['Region', 'ITEM'], ['Segment', 'SERIES'], ['Sales', 'VALUE']]);
+	assert.ok(broken.issues.some((i) => i.code === 'card.unsupported-field'));
+
+	const ws = sheet({ cols: `${REGION} / ${CATEGORY} / ${SEGMENT}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
+	ws.panes[0].tooltip = `Region: <${REGION}>\nCategory: <${CATEGORY}>\nSegment: <${SEGMENT}>\nSales: <${SALES}>`;
+	const { cards } = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: {} });
+	assert.equal(cards[0].body.definition.charts.main.overrides.hover_text, 'Region: %_CATEGORY_NAME\nCategory: %_TOOLTIP1\nSegment: %_SERIES_NAME\nSales: %_VALUE');
 });
 
 test('a table calculation along a combined level partitions by the level columns, which the card then groups by', () => {
 	const PCT = p('pcto:sum', 'Sales', 'qk');
 	const SEGMENT = p('none', 'Segment');
-	const ws = sheet({ cols: `${REGION} / ${CATEGORY}`, rows: PCT, mark: 'Bar', enc: { color: [SEGMENT] } });
+	const ws = sheet({ cols: `${REGION} / ${CATEGORY} / ${SEGMENT}`, rows: PCT, mark: 'Bar', enc: { color: [SEGMENT] } });
 	ws.pills[PCT].tableCalc = { type: 'PctTotal', orderingType: 'Field', orderFields: [`[${DS}].[Category]`], attrs: { prefix: 'pcto' } };
 	const [card] = planCards(workbook({ worksheets: [ws] }), makeBindings(), { options: { useWindowFunctions: true } }).cards;
 	const { formulas, subscriptions } = card.body.definition;
-	assert.equal(card.chartType, 'badge_vert_stackedbar');
+	assert.equal(card.chartType, 'badge_vert_multibar');
 	const value = subscriptions.main.columns.find((c) => c.mapping === 'VALUE');
 	assert.equal(formulas.card.find((f) => f.id === value.formulaId).formula, 'SUM(`Sales`) / NULLIF(SUM(SUM(`Sales`)) OVER (PARTITION BY `Region`, `Segment`), 0)');
 	assert.deepEqual(subscriptions.main.groupBy.map((g) => g.column), ['calculation_card_1', 'Segment', 'Region', 'Category']);

@@ -37,6 +37,7 @@ import { openWorkspace } from './workspace.js';
  * @property {{ tableau: number, domo: number, ok: boolean|null }} [rows]
  * @property {ColumnCheck[]} [columns]
  * @property {string[]} [unmatched]            Domo columns with no Tableau header
+ * @property {{ limit: number, rows: number, atLeast?: true }} [drawLimited]  Phoenix draws the card from fewer rows than its query returns
  * @property {string[]} notes
  *
  * @typedef {Object} VerifySummary
@@ -47,6 +48,7 @@ import { openWorkspace } from './workspace.js';
  * @property {number} [sampled]
  * @property {CardVerification[]} cards
  * @property {Record<VerifyStatus, number>} counts
+ * @property {number} [drawLimited]            Cards Phoenix draws from part of their rows
  * @property {string} verifiedAt
  */
 
@@ -54,11 +56,19 @@ const NULL_MEMBER = '(null)';
 const TOTAL_MEMBER = 'all';
 const NULL_TEXT = new Set(['', 'null', '(null)', '%null%']);
 const NUMERIC_TYPES = new Set(['LONG', 'DOUBLE', 'DECIMAL', 'NUMBER', 'INTEGER']);
-const DIMENSION_MAPPINGS = new Set(['ITEM', 'SERIES', 'ROW', 'COLUMN', 'CATEGORY', 'GROUP', 'PIVOT', 'LABEL']);
+const DIMENSION_MAPPINGS = new Set(['ITEM', 'SERIES', 'ROW', 'COLUMN', 'CATEGORY', 'GROUP', 'GROUP1', 'GROUP2', 'PIVOT', 'LABEL']);
 const AGG_PREFIX = /^(sum of|average of|avg\.?|count of|distinct count of|count distinct of|countd of|minimum of|maximum of|min\.?|max\.?|median of|attr|agg|std\.? dev\.? of|variance of)\s+/i;
 const AGG_CALL = /^(sum|avg|count|countd|cntd|min|max|median|attr|agg|ctd)\s*\((.*)\)$/i;
 const EXAMPLES = 5;
 const RENDER_ROW_LIMIT = 250000;
+const LARGE_LIMIT = 100000;
+const SMALL_LIMIT = 25000;
+const PIVOT_TABLE_LIMIT = 10000;
+const TABLE_CELL_LIMIT = 10000;
+const SELECT_LIMIT = 500000;
+const DATE_SELECTOR_LIMIT = 500;
+const LARGE_LIMIT_CHART = /^badge_((horiz|vert)_(boxplot|histogram)|map(_|$)|world_map$)/;
+const SELECTORS = new Set(['badge_checkbox_selector', 'badge_dropdown_selector', 'badge_range_selector', 'badge_radio_selector', 'badge_slicer', 'badge_buttons']);
 
 /** Header and rows of a Tableau view data CSV. */
 export function parseViewCsv(text) {
@@ -365,6 +375,31 @@ function round(n) {
 	return Math.round(n * 1e6) / 1e6;
 }
 
+// Phoenix packet LimitService.getPhoenixLimitByChartType, for a request with no limit (a page view); a Mega Table pages.
+export function phoenixRowLimit(chartType, columns = 1) {
+	if (chartType === 'badge_basic_table') return undefined;
+	if (LARGE_LIMIT_CHART.test(chartType)) return LARGE_LIMIT;
+	if (chartType === 'badge_table' || chartType === 'badge_heatmap_table') return Math.floor(TABLE_CELL_LIMIT / Math.max(columns, 1)) + 1;
+	if (chartType === 'badge_date_selector') return DATE_SELECTOR_LIMIT;
+	if (chartType === 'badge_pivot_table') return PIVOT_TABLE_LIMIT;
+	if (SELECTORS.has(chartType)) return SELECT_LIMIT;
+	return SMALL_LIMIT;
+}
+
+export function drawLimit(card, domo) {
+	const chartType = card?.chartType ?? card?.body?.definition?.chartType;
+	const limit = domo && chartType ? phoenixRowLimit(chartType, domo.columns.length) : undefined;
+	const own = Number(card?.body?.definition?.subscriptions?.main?.limit);
+	if (!limit || domo.rows.length <= limit || (own > 0 && own <= limit)) return undefined;
+	return { limit, rows: domo.rows.length, ...(domo.limited ? { atLeast: true } : {}) };
+}
+
+function drawLimitNote(card, drawn) {
+	const pivot = (card.chartType ?? card.body?.definition?.chartType) === 'badge_pivot_table';
+	const rows = `${drawn.rows.toLocaleString('en-US')}${drawn.atLeast ? ' or more' : ''}`;
+	return `DRAW LIMIT: Phoenix draws this card from at most ${drawn.limit.toLocaleString('en-US')} rows and its query returns ${rows}, so the card shows part of the data${pivot ? ' (missing subtotals show as red ###)' : ''}; the data check used all rows`;
+}
+
 /** Card render body; the card's own filters stay as saved, `filters` are added like a page filter. */
 export async function renderCard(domo, cardId, { filters = [], limit = RENDER_ROW_LIMIT } = {}) {
 	return domo.put(`/content/v1/cards/kpi/${encodeURIComponent(cardId)}/render`, { queryOverrides: { filters, limit }, width: 800, height: 400, scale: 1 }, { query: { parts: 'dynamic,summary' } });
@@ -525,6 +560,12 @@ export async function verifyWorkbook({ config, slug, tolerance = 0.005, keys, em
 			try {
 				item.domo = renderData(await renderCard(domo, result.cardId, { filters }), { grouped: groupedColumns(card) });
 				if (!item.domo) result.notes.push('the Domo render returned no data rows');
+				const drawn = drawLimit(card, item.domo);
+				if (drawn) {
+					result.drawLimited = drawn;
+					result.notes.push(drawLimitNote(card, drawn));
+					emitter.warn(`Card ${result.cardId} "${card.title}": ${drawLimitNote(card, drawn).replace(/^DRAW LIMIT: /, '')}`);
+				}
 			} catch (err) {
 				result.notes.push(`Domo render failed: ${err?.message ?? err}`);
 			}
@@ -581,6 +622,7 @@ export async function verifyWorkbook({ config, slug, tolerance = 0.005, keys, em
 	const counts = { ok: 0, differs: 0, 'not-comparable': 0 };
 	for (const r of results) counts[r.status]++;
 	const sampled = results.map((r) => r.sampled).find(Boolean);
+	const drawLimited = results.filter((r) => r.drawLimited).length;
 	const summary = {
 		slug,
 		instance,
@@ -589,6 +631,7 @@ export async function verifyWorkbook({ config, slug, tolerance = 0.005, keys, em
 		...(sampled ? { sampled } : {}),
 		cards: results,
 		counts,
+		...(drawLimited ? { drawLimited } : {}),
 		...(searchStubs ? { searchStubs } : {}),
 		verifiedAt: new Date().toISOString()
 	};

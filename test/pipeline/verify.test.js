@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { checkVdsAccess } from '../../src/cli/commands/doctor.js';
 import { cardDetail } from '../../src/cli/commands/verify.js';
-import { compareCardData, groupedColumns, matchColumns, normalizeMember, pageFilterOverrides, parseNumber, parseViewCsv, pivotMeasureValues, renderData, sampledRows, verifyWorkbook } from '../../src/pipeline/verify.js';
+import { compareCardData, drawLimit, groupedColumns, phoenixRowLimit, matchColumns, normalizeMember, pageFilterOverrides, parseNumber, parseViewCsv, pivotMeasureValues, renderData, sampledRows, verifyWorkbook } from '../../src/pipeline/verify.js';
 import { openWorkspace } from '../../src/pipeline/workspace.js';
 import { samplePlan, tempDir, testConfig } from './helpers.js';
 
@@ -102,6 +102,8 @@ test('renderData classifies numeric value columns as measures', () => {
 	);
 	const year = renderData(render([{ name: 'Year', mapping: 'ITEM', type: 'LONG' }], [[2024]]));
 	assert.equal(year.columns[0].role, 'dimension');
+	const trellis = renderData(render([{ name: 'Quarter', mapping: 'ITEM', type: 'STRING' }, { name: 'Year', mapping: 'GROUP1', type: 'LONG' }, { name: 'Era', mapping: 'GROUP2', type: 'LONG' }], [['Q1', 2024, 2]]));
+	assert.deepEqual(trellis.columns.map((c) => c.role), ['dimension', 'dimension', 'dimension'], 'trellis group columns are dimensions');
 	assert.equal(renderData({}), null);
 });
 
@@ -125,6 +127,23 @@ test('renderData: a grouped numeric column is a dimension, and rows at the rende
 	assert.equal(d.limited, false);
 	raw.chart.datasources.ds.data.limit = 2;
 	assert.equal(renderData(raw).limited, true);
+});
+
+test('phoenixRowLimit and drawLimit: a card Phoenix draws from fewer rows than its query returns is reported', () => {
+	assert.deepEqual(
+		['badge_pivot_table', 'badge_basic_table', 'badge_vert_bar', 'badge_map_us_state', 'badge_world_map', 'badge_vert_boxplot', 'badge_dropdown_selector', 'badge_date_selector'].map((t) => phoenixRowLimit(t)),
+		[10000, undefined, 25000, 100000, 100000, 100000, 500000, 500]
+	);
+	assert.equal(phoenixRowLimit('badge_table', 4), 2501, 'an HTML table holds 10,000 cells');
+	const rows = (n) => Array.from({ length: n }, (_, i) => [`m${i}`, i]);
+	const domo = (n, limited = false) => ({ columns: [{ name: 'A' }, { name: 'B' }], rows: rows(n), limited });
+	const pivot = { chartType: 'badge_pivot_table', body: { definition: { subscriptions: { main: {} } } } };
+	assert.deepEqual(drawLimit(pivot, domo(59479)), { limit: 10000, rows: 59479 });
+	assert.deepEqual(drawLimit(pivot, domo(250000, true)), { limit: 10000, rows: 250000, atLeast: true });
+	assert.equal(drawLimit(pivot, domo(10000)), undefined);
+	assert.equal(drawLimit({ ...pivot, chartType: 'badge_basic_table' }, domo(59479)), undefined, 'a Mega Table pages');
+	assert.equal(drawLimit({ chartType: 'badge_pivot_table', body: { definition: { subscriptions: { main: { limit: 50 } } } } }, domo(59479)), undefined, 'the card limits itself');
+	assert.equal(drawLimit(pivot, null), undefined);
 });
 
 test('compareCardData compares measure columns pivoted on a Tableau dimension with the Tableau measure per member', () => {
@@ -293,6 +312,18 @@ test('verifyWorkbook compares pushed cards and writes verify.json', async () => 
 	assert.ok(calls.every((c) => c[0] === 'download' || c[0] === 'put'));
 	assert.ok(calls.some((c) => c[0] === 'put' && c[1] === '/content/v1/cards/kpi/101/render' && c[2] === 'dynamic,summary'));
 	assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir, 'verify.json'), 'utf8')).counts.ok, 1);
+});
+
+test('verifyWorkbook reports a card Phoenix draws from part of its rows', async () => {
+	const { root } = await pushedWorkspace();
+	const rows = Array.from({ length: 25001 }, (_, i) => [`r${i}`, 1]);
+	const { calls, deps } = fakes([{ id: 'v1', name: 'Sheet 1' }], { v1: 'Region,Sum of Sales\nEast,10\n' }, { 101: render([{ name: 'Region', mapping: 'ITEM', type: 'STRING' }, { name: 'Sales', mapping: 'VALUE', type: 'DOUBLE' }], rows) });
+	const summary = await verifyWorkbook({ config: testConfig(root), slug: 'sales', keys: ['sheet-1'], deps });
+	const card = summary.cards.find((c) => c.key === 'sheet-1');
+	assert.deepEqual(card.drawLimited, { limit: 25000, rows: 25001 });
+	assert.ok(card.notes.some((n) => /^DRAW LIMIT: .*at most 25,000 rows .* returns 25,001/.test(n)));
+	assert.equal(summary.drawLimited, 1);
+	assert.equal(calls.find((c) => c[0] === 'put')[3].limit, 250000, 'the data check still reads past the draw limit');
 });
 
 test('verifyWorkbook flags pushed app views that have a title-less page search entry', async () => {

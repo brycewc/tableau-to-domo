@@ -36,7 +36,26 @@ test('colorEncodings reads palette, member maps, multibuckets and custom gradien
 		{ value: 'East', color: '#e15759' },
 		{ value: null, color: '#4e79a7' }
 	]);
-	assert.deepEqual(map.get('[sum:Sales:qk]'), { type: 'custom-interpolated', colors: ['#ffffff', '#1f77b4'] });
+	assert.deepEqual(map.get('[sum:Sales:qk]'), { type: 'custom-interpolated', colors: ['#ffffff', '#1f77b4'], paletteType: 'ordered-sequential' });
+});
+
+test('colorEncodings reads the center, step count, palette type and include-totals of a gradient', () => {
+	const enc = colorEncodings(style(`
+		<style-rule element='mark'>
+			<encoding attr='color' center='-1.0' field='[diff:sum:Bookings:qk:8]' include-totals='true' num-steps='2' type='custom-interpolated'>
+				<color-palette custom='true' name='' type='ordered-diverging'><color>#ffffbf</color><color>#d9d9d9</color><color>#ffffff</color></color-palette>
+			</encoding>
+			<encoding attr='color' field='[sum:Sales:qk]' type='interpolated' palette='blue_10_0' />
+		</style-rule>`));
+	assert.deepEqual(enc.get('[diff:sum:Bookings:qk:8]'), {
+		type: 'custom-interpolated',
+		colors: ['#ffffbf', '#d9d9d9', '#ffffff'],
+		paletteType: 'ordered-diverging',
+		center: -1,
+		steps: 2,
+		includeTotals: true
+	});
+	assert.deepEqual(enc.get('[sum:Sales:qk]'), { type: 'interpolated', palette: 'blue_10_0' });
 });
 
 test('colorEncodings caps member maps and records the full count', () => {

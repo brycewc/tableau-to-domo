@@ -1,6 +1,6 @@
 import { parsePillId } from '../tableau/twb/shelf.js';
 import { stripBrackets } from '../model/naming.js';
-import { tableCalcAddressing } from './calc/tablecalc.js';
+import { quickCalcType, tableCalcAddressing } from './calc/tablecalc.js';
 
 /**
  * @typedef {import('../model/types.js').WorksheetIR} WorksheetIR
@@ -40,6 +40,7 @@ import { tableCalcAddressing } from './calc/tablecalc.js';
  * @property {string[]} [keptHeaders]         Hidden headers a flat table shows as columns, sorted ascending as Tableau lists them
  * @property {{ pillId: string }} [split]     Small multiples drawn as one card per member of this dimension
  * @property {{ pillId: string, members: Array<string|number>, measure: string }} [spread]  crosstab column header written as one value column per member
+ * @property {{ pillIds: string[] }} [heatmap]  Mega Table value columns colored as heatmap columns (the color measure's)
  * @property {Issue[]} warnings
  * @property {string} family                  bar | line | area | combo | pie | scatter | map | table | pivot | crosstab | kpi | treemap | heatmap | gantt | histogram | fallback
  * @property {string} mark                    Resolved Tableau mark class
@@ -326,6 +327,7 @@ function finish(ctx, result) {
 	if (result.sortOnly?.length) out.sortOnly = result.sortOnly;
 	if (result.keptHeaders?.length) out.keptHeaders = result.keptHeaders;
 	if (result.spread) out.spread = result.spread;
+	if (result.heatmap) out.heatmap = result.heatmap;
 	if (result.overrides) out.overrides = result.overrides;
 	return out;
 }
@@ -338,7 +340,7 @@ export function measureKey(pill, { withCalc = true } = {}) {
 	return `${pill.datasourceId ?? ''}|${pill.fieldId}|${String(pill.derivation ?? 'None').toLowerCase()}${calc}`;
 }
 
-const isPctTotal = (pill) => !pill.tableCalc?.secondary && /pcto|pcttotal|pct ?total|percent ?of ?total/i.test(`${pill.tableCalc?.type ?? ''} ${pill.tableCalc?.attrs?.prefix ?? ''}`);
+export const isPctTotal = (pill) => !pill.tableCalc?.secondary && /pcto|pcttotal|pct ?total|percent ?of ?total/i.test(`${pill.tableCalc?.type ?? ''} ${pill.tableCalc?.attrs?.prefix ?? ''}`);
 
 /**
  * What a percent-of-total pill sums to 100% along: 'series' (each category's series), 'table' (every mark), or
@@ -404,38 +406,132 @@ export function customTooltip(ws) {
 	return markPanes(ws).find((p) => p.tooltip)?.tooltip;
 }
 
-const DIM_MACROS = { ITEM: '%_CATEGORY_NAME', SERIES: '%_SERIES_NAME', CATEGORY: '%_CATEGORY', START_DATE: '%_STARTDATE', XTIME: '%_XVALUE' };
+const AGG_LABELS = { avg: 'Avg.', countd: 'Distinct count of', count: 'Count of', min: 'Min.', max: 'Max.', median: 'Median' };
+const DATE_LABELS = { year: 'Year', quarter: 'Quarter', month: 'Month', week: 'Week', day: 'Day', weekday: 'Weekday', hour: 'Hour', minute: 'Minute', second: 'Second' };
+
+const CALC_AGG_LABELS = { sum: 'Sum', avg: 'Avg', average: 'Avg', min: 'Min', max: 'Max' };
+const CALC_LABELS = {
+	PctTotal: () => '% of Total',
+	CumTotal: (attrs) => `Running ${CALC_AGG_LABELS[String(attrs?.aggregation ?? 'sum').toLowerCase()] ?? 'Sum'} of`,
+	Diff: () => 'Difference in',
+	PctDiff: () => '% Difference in',
+	Rank: () => 'Rank of',
+	PctRank: () => 'Percentile of',
+	MovingCalc: (attrs) => `Moving ${MOVING_AGG_LABELS[String(attrs?.aggregation ?? 'avg').toLowerCase()] ?? 'Average'} of`
+};
+const MOVING_AGG_LABELS = { ...CALC_AGG_LABELS, avg: 'Average', average: 'Average' };
+
+/** Tableau's name for a quick table calculation over a field named `base`, e.g. "% of Total Count of Customer". */
+function tableCalcLabel(calc, base) {
+	const label = CALC_LABELS[quickCalcType(calc.type)]?.(calc.attrs);
+	if (!label) return base;
+	const primary = `${label} ${base}`;
+	return calc.secondary ? tableCalcLabel(calc.secondary, primary) : primary;
+}
+
+/**
+ * Tableau's default label for a pill: its field name, with the aggregation unless it is a sum, or its date part or
+ * truncation, inside the name of its quick table calculation.
+ */
+export function pillLabel(ws, ir, pillId) {
+	const pill = pillFor(ws, pillId);
+	const name = findField(ir, pill.datasourceId, pill.fieldId)?.name ?? stripBrackets(pill.fieldId);
+	const part = DATE_LABELS[pill.datePart ?? pill.dateTrunc ?? ''];
+	if (part) return `${part} of ${name}`;
+	const agg = AGG_LABELS[String(pill.derivation ?? '').toLowerCase()];
+	const base = agg ? `${agg} ${name}` : name;
+	return pill.tableCalc ? tableCalcLabel(pill.tableCalc, base) : base;
+}
+
+/**
+ * The fields of a labeled pane's default label: its Text and Label shelf fields, else the measure it plots (its own axis
+ * on a dual axis, else the one measure on Rows and Columns). Empty when that is Measure Values or several measures.
+ */
+export function labelPills(ws, ir, pane) {
+	const pills = [...new Set([...(pane.encodings?.text ?? []), ...(pane.encodings?.label ?? [])])];
+	if (pills.length) return pills;
+	const own = pane.yAxisPill ?? pane.xAxisPill;
+	const measures = own ? [own] : [...(ws.rowPills ?? []), ...(ws.colPills ?? [])].filter((id) => /^measure/.test(classifyPill(ws, ir, id).kind));
+	return measures.length === 1 && classifyPill(ws, ir, measures[0]).kind === 'measure' ? measures : [];
+}
+
+/** The data label Tableau draws: its customized label, else its label fields, else the mark's value. */
+export function tableauLabel(ws, ir) {
+	const pane = markPanes(ws).find((p) => p.showLabels);
+	if (!pane) return undefined;
+	if (pane.label) return pane.label;
+	const pills = labelPills(ws, ir, pane);
+	return pills.length ? pills.map((id) => `<${id}>`).join('\n') : '<[Multiple Values]>';
+}
+
+const MARK_SHELVES = ['color', 'size', 'shape', 'text', 'label', 'detail', 'tooltip', 'path', 'wedgeSize'];
+
+/**
+ * Tableau's default tooltip: a "<label>: <[pill]>" line per field in the view, dimensions, then measures and ATTR. Each
+ * group is in column instance order, which Tableau sorts by instance name (`[none:Region:nk]`), as its live hover shows.
+ */
+export function defaultTooltipText(ws, ir) {
+	const encoded = (key) => (ws.panes ?? []).flatMap((p) => p.encodings?.[key] ?? []);
+	const ids = uniq([...(ws.colPills ?? []), ...(ws.rowPills ?? []), ...MARK_SHELVES.flatMap(encoded)]);
+	const classified = ids.map((id) => classifyPill(ws, ir, id));
+	const measureNames = classified.find((c) => c.kind === 'measure-names');
+	const lines = [];
+	const add = (measure, key, pillId, line) => {
+		if (lines.some((l) => l.key === key)) return;
+		const source = (ws.datasourceIds ?? []).indexOf(pillFor(ws, pillId).datasourceId);
+		lines.push({ measure, key, line, source: source < 0 ? Infinity : source, instance: pillId.replace(/^\[[^\]]*\]\.(?=\[)/, '') });
+	};
+	for (const c of classified) {
+		if (c.generated || c.kind === 'measure-names') continue;
+		if (c.kind === 'measure-values') {
+			const [only, ...more] = ws.measureValues ?? [];
+			if (only && !more.length) add(true, `m:${measureKey(pillFor(ws, only))}`, only, `${pillLabel(ws, ir, only)}: <${only}>`);
+			else if (measureNames) add(true, 'measure-values', measureNames.pillId, `<${measureNames.pillId}>: <${c.pillId}>`);
+			continue;
+		}
+		const measure = c.kind === 'measure' || isAttrDim(c) || (c.kind === 'latlong' && c.pill.aggregated);
+		add(measure, measure ? `m:${measureKey(c.pill)}` : `d:${dimKey(c.pill)}`, c.pillId, `${pillLabel(ws, ir, c.pillId)}: <${c.pillId}>`);
+	}
+	const byInstance = (a, b) => a.source - b.source || (a.instance < b.instance ? -1 : a.instance > b.instance ? 1 : 0);
+	return [...lines.filter((l) => !l.measure).sort(byInstance), ...lines.filter((l) => l.measure).sort(byInstance)].map((l) => l.line).join('\n');
+}
+
+const DIM_MACROS = { ITEM: '%_CATEGORY_NAME', SERIES: '%_SERIES_NAME', CATEGORY: '%_CATEGORY', START_DATE: '%_STARTDATE', XTIME: '%_XVALUE', GROUP1: '%_CATEGORY2_NAME', GROUP2: '%_CATEGORY3_NAME' };
 const dimKey = (pill) => `${pill.datasourceId ?? ''}|${pill.fieldId}|${String(pill.derivation ?? 'None').toLowerCase()}`;
+const EXTRA_SLOT = /^EXTRAINFO(\d)$/;
 
 /**
  * The Phoenix hover and data label macro for a pill a Tableau tooltip or label names, from the card's slots.
  * `{ extra: true }` is an aggregate the card does not show, which needs an EXTRAINFO slot; undefined has no macro.
+ * `{ unconverted: true }` is a measure whose table calc the card could not convert (`unconverted`, measure keys).
  * On a 100% chart the VALUE column holds the measure without its percent of total (Phoenix shows that as %_VALUE).
  *
  * @param {WorksheetIR} ws
  * @param {WorkbookIR} ir
  * @param {string} pillId
  * @param {{ pillId: string, mapping: string, role: string }[]} slots
- * @param {{ pct100?: boolean, family?: string }} [opts]
- * @returns {{ macro: string }|{ extra: true }|undefined}
+ * @param {{ pct100?: boolean, family?: string, unconverted?: Set<string> }} [opts]
+ * @returns {{ macro: string }|{ extra: true }|{ unconverted: true }|undefined}
  */
-export function slotMacro(ws, ir, pillId, slots, { pct100 = false, family } = {}) {
+export function slotMacro(ws, ir, pillId, slots, { pct100 = false, family, unconverted } = {}) {
 	const c = classifyPill(ws, ir, pillId);
+	if (c.kind === 'measure' && unconverted?.has(measureKey(c.pill))) return { unconverted: true };
 	const measureSeries = slots.some((s) => s.mapping === 'SERIES' && s.role !== 'dim');
 	if (c.kind === 'measure-names') return measureSeries ? { macro: '%_SERIES_NAME' } : undefined;
 	if (c.kind === 'measure-values') return measureSeries || slots.some((s) => s.mapping === 'VALUE') ? { macro: '%_VALUE' } : undefined;
 	const pillOf = (s) => pillFor(ws, s.pillId);
 	if (c.kind !== 'measure') {
 		const hit = slots.find((s) => s.role !== 'measure' && DIM_MACROS[s.mapping] && dimKey(pillOf(s)) === dimKey(c.pill));
-		if (!hit) return undefined;
-		if (hit.mapping === 'ITEM' && family === 'gantt') return { macro: '%_ITEM' };
-		return { macro: DIM_MACROS[hit.mapping] };
+		if (hit?.mapping === 'ITEM' && family === 'gantt') return { macro: '%_ITEM' };
+		if (hit) return { macro: DIM_MACROS[hit.mapping] };
+		const extra = slots.find((s) => EXTRA_SLOT.test(s.mapping) && dimKey(pillOf(s)) === dimKey(c.pill));
+		return extra ? { macro: `%_TOOLTIP${EXTRA_SLOT.exec(extra.mapping)[1]}` } : undefined;
 	}
 	const key = measureKey(c.pill);
 	for (const s of slots) {
 		if (s.role === 'dim') continue;
 		const p = pillOf(s);
-		const extra = /^EXTRAINFO(\d)$/.exec(s.mapping);
+		const extra = EXTRA_SLOT.exec(s.mapping);
 		if (extra && measureKey(p) === key) return { macro: `%_TOOLTIP${extra[1]}` };
 		if (s.mapping === 'VALUE' && measureKey(p, { withCalc: !pct100 }) === key) return { macro: family === 'scatter' ? '%_YVALUE' : '%_VALUE' };
 		if (s.mapping === 'XTIME' && measureKey(p) === key) return { macro: '%_XVALUE' };
@@ -454,29 +550,44 @@ export function slotMacro(ws, ir, pillId, slots, { pct100 = false, family } = {}
 	return { extra: true };
 }
 
+const isAttrDim = (c) => c.kind === 'dimension' && /^attr/i.test(String(c.pill.derivation ?? ''));
+
 /**
- * Tooltip measures the card does not already show go in EXTRAINFO1..3. With a custom Tableau tooltip only the measures it
- * names count: Phoenix shows an EXTRAINFO column only through a %_TOOLTIPn macro in the hover text.
+ * Fields the mark label or tooltip names that the card does not already show go in EXTRAINFO1..3: label measures, then
+ * tooltip measures, then tooltip dimensions the card groups by (`grouped`) and ATTR dimensions. Phoenix shows an
+ * EXTRAINFO column only through a %_TOOLTIPn macro in the hover or label text.
  */
-function addTooltips(ctx, mappings, { limit = 3, pct100 = false, family } = {}) {
+function addTooltips(ctx, mappings, { limit = 3, pct100 = false, family, grouped = [] } = {}) {
 	const { a, ws, ir } = ctx;
+	const opts = { pct100, family };
+	const pills = (text) => (text ? textTokens(text).filter((t) => t.token && isPillToken(t.token)).map((t) => classifyPill(ws, ir, t.token)) : []);
 	const custom = customTooltip(ws);
-	const shown = custom
-		? textTokens(custom)
-				.filter((t) => t.token && isPillToken(t.token))
-				.map((t) => classifyPill(ws, ir, t.token))
-		: a.get('tooltip');
-	const measures = [];
-	for (const c of shown) {
-		if (c.kind !== 'measure' || measures.some((m) => measureKey(m.pill) === measureKey(c.pill))) continue;
-		if (slotMacro(ws, ir, c.pillId, mappings, { pct100, family })?.extra) measures.push(c);
+	const tooltipOn = ws.tooltipMode !== 'none';
+	const tooltip = tooltipOn ? pills(custom ?? defaultTooltipText(ws, ir)) : [];
+	const groupedKeys = new Set(grouped.map((id) => dimKey(pillFor(ws, id))));
+	const keyOf = (c) => (c.kind === 'measure' ? `m:${measureKey(c.pill)}` : `d:${dimKey(c.pill)}`);
+	const picked = [];
+	const pick = (c, source, dims) => {
+		if (picked.some((p) => keyOf(p.c) === keyOf(c))) return;
+		if (c.kind === 'measure') {
+			if (slotMacro(ws, ir, c.pillId, mappings, opts)?.extra) picked.push({ c, source, role: 'measure' });
+			return;
+		}
+		if (!dims || !isDim(c) || slotMacro(ws, ir, c.pillId, mappings, opts)) return;
+		if (isAttrDim(c)) picked.push({ c, source, role: 'measure' });
+		else if (groupedKeys.has(dimKey(c.pill))) picked.push({ c, source, role: 'dim' });
+	};
+	for (const c of pills(tableauLabel(ws, ir))) pick(c, 'label', false);
+	for (const c of tooltip) pick(c, 'tooltip', false);
+	for (const c of tooltip) pick(c, 'tooltip', true);
+	picked.slice(0, limit).forEach(({ c, role }, i) => mappings.push(slot(c, `EXTRAINFO${i + 1}`, role)));
+	const dropped = picked.slice(limit);
+	if (dropped.length) {
+		const severity = dropped.some((p) => p.source === 'label') ? 'warning' : 'info';
+		ctx.out.warnings.push(issue(ws, severity, 'chart.tooltip', `Only ${limit} label and tooltip fields fit in Domo extra-info slots; ${dropped.map((p) => `${nameOf(p.c)} (${p.source})`).join(', ')} dropped`));
 	}
-	measures.slice(0, limit).forEach((c, i) => mappings.push(slot(c, `EXTRAINFO${i + 1}`, 'measure')));
-	if (measures.length > limit) {
-		ctx.out.warnings.push(issue(ctx.ws, 'info', 'chart.tooltip', `Only ${limit} tooltip measures fit in Domo extra-info slots; ${measures.length - limit} dropped`));
-	}
-	const dims = custom ? [] : a.get('tooltip').filter(isDim);
-	if (dims.length) ctx.out.warnings.push(issue(ctx.ws, 'info', 'chart.tooltip', `Tooltip dimensions (${dims.map(nameOf).join(', ')}) are not carried over`));
+	const dims = custom || !tooltipOn ? [] : a.get('tooltip').filter((c) => isDim(c) && !isAttrDim(c) && !slotMacro(ws, ir, c.pillId, mappings, opts));
+	if (dims.length) ctx.out.warnings.push(issue(ws, 'info', 'chart.tooltip', `Tooltip dimensions (${dims.map(nameOf).join(', ')}) are not carried over`));
 }
 
 function nameOf(c) {
@@ -552,6 +663,23 @@ function clickActionOnLevels(ctx, levels) {
 		(action.fields ?? []).some((f) => f.source === c.pill.fieldId || String(f.source).endsWith(`.${c.pill.fieldId}`)) ||
 		(action.fieldCaptions ?? []).includes(nameOf(c));
 	return (ir?.actions ?? []).find((action) => (action.type === 'filter' || action.type === 'highlight') && (action.source?.worksheets ?? [action.source?.worksheet]).includes(ws.name) && levels.some((c) => passes(action, c)));
+}
+
+/**
+ * Nested levels as Phoenix trellis categories: innermost ITEM, then GROUP1, then GROUP2 (from four levels, a combination of
+ * the outer ones). A color on no level is the stacked SERIES.
+ */
+function trellisLevels(ctx, axis, colorDims) {
+	const { ws } = ctx;
+	if (axis.length < 2 || axis.some((c) => c.kind === 'date')) return undefined;
+	if (colorDims.some((d) => axis.some((x) => sameField(x, d)))) return undefined;
+	const seen = axis.filter((c) => !unseenLevel(ws, c));
+	if (seen.length < 2) return undefined;
+	const item = seen.at(-1);
+	const group1 = seen.at(-2);
+	const outer = seen.slice(0, -2);
+	if (outer.length > 1 && clickActionOnLevels(ctx, outer)) return undefined;
+	return { item, group1, group2: outer[0], group2Levels: outer.length > 1 ? outer : undefined, series: colorDims[0], unseen: axis.filter((c) => !seen.includes(c)) };
 }
 
 // Domo bars take one ITEM and one SERIES. Tableau stacks a color on no level within each cell of the level tuple; without
@@ -690,12 +818,22 @@ function axisChart(ctx, family, dualPanes) {
 		out.warnings.push(issue(ws, 'info', 'chart.hidden-level', `${hiddenLevels.map(nameOf).join(', ')} has hidden headers in Tableau; it still groups and sorts the rows but takes no axis or series slot`));
 	}
 	const colorMeasure = a.get('color').find((c) => c.kind === 'measure');
-	const combined = family === 'bar' ? combinedCategory(ctx, axis, colorDims, paneSeries) : undefined;
+	const trellis = family === 'bar' && !paneSeries ? trellisLevels(ctx, axis, colorDims) : undefined;
+	const combined = family === 'bar' && !trellis ? combinedCategory(ctx, axis, colorDims, paneSeries) : undefined;
 	let item = axis[0];
 	let mappings = [axisSlot(item, 'ITEM', family)];
 	let series = paneSeries;
 	let nested = false;
-	if (combined) {
+	const groups = trellis ? [trellis.group1, trellis.group2].filter(Boolean) : [];
+	const groupPills = trellis ? [trellis.group1.pillId, ...(trellis.group2Levels ?? [trellis.group2]).filter(Boolean).map((c) => c.pillId)] : [];
+	if (trellis) {
+		item = trellis.item;
+		mappings = [axisSlot(item, 'ITEM', family)];
+		series = trellis.series;
+		if (trellis.unseen.length) out.sortOnly = [...(out.sortOnly ?? []), ...trellis.unseen.map((c) => c.pillId)];
+		const outer = [...(trellis.group2Levels ?? [trellis.group2]), trellis.group1].filter(Boolean);
+		out.warnings.push(issue(ws, 'info', 'chart.trellis', `${outer.map(nameOf).join(', ')} ${outer.length > 1 ? 'draw' : 'draws'} as trellis categories over ${nameOf(item)}, as Tableau's header bands`));
+	} else if (combined) {
 		item = combined.levels[0];
 		const derived = combined.levels.length > 1 ? { derived: { type: 'concat', pillIds: combined.levels.map((c) => c.pillId) } } : {};
 		mappings = [{ ...axisSlot(item, 'ITEM', family), ...derived }];
@@ -704,11 +842,11 @@ function axisChart(ctx, family, dualPanes) {
 		if (combined.unseen.length) out.sortOnly = [...(out.sortOnly ?? []), ...combined.unseen.map((c) => c.pillId)];
 	}
 	const levels = paneSeries ? 1 : 2;
-	if (!combined && !paneSeries && axis.length >= 2) {
+	if (!trellis && !combined && !paneSeries && axis.length >= 2) {
 		series = axis[1];
 		nested = true;
 	}
-	if (!combined && axis.length > levels) {
+	if (!trellis && !combined && axis.length > levels) {
 		out.warnings.push(issue(ws, 'warning', 'chart.extra-dimension', `Only two category levels fit a Domo ${family} chart; ${axis.slice(levels).map(nameOf).join(', ')} dropped`));
 	}
 	const color = !combined && colorDims.find((c) => !sameField(c, item));
@@ -766,19 +904,25 @@ function axisChart(ctx, family, dualPanes) {
 		if (series) mappings.push(slot(series, 'SERIES', 'dim'));
 		mappings.push(slot(primary, 'VALUE', 'measure'));
 	}
+	groups.forEach((c, i) => {
+		const group = axisSlot(c, `GROUP${i + 1}`, family);
+		mappings.push(i === 1 && trellis.group2Levels ? { ...group, derived: { type: 'concat', pillIds: trellis.group2Levels.map((l) => l.pillId) } } : group);
+	});
 	if (!measureSeries && others.length) {
 		out.warnings.push(
 			issue(ws, 'warning', 'chart.multi-measure', `Domo ${family} charts take one VALUE column and the SERIES slot holds ${nameOf(series)}; ${others.map(nameOf).join(', ')} dropped`, 'Unpivot the measures in ETL, or split into separate cards.')
 		);
 	}
 	// A 100% chart sums each category's series to 100%: the percent of total must run along the series only.
-	const itemPills = combined ? combined.levels.map((c) => c.pillId) : item.pillId;
+	const itemPills = combined ? combined.levels.map((c) => c.pillId) : trellis ? [...groupPills, item.pillId] : item.pillId;
 	const pct = measureSeries
 		? hasPctTotal(uniqueMeasures)
 		: Boolean(series) && ((isPctTotal(primary.pill) && percentScope(ws, primary.pillId, itemPills, series.pillId) === 'series') || (family === 'bar' && percentLabelStack(ws, primary, itemPills, series.pillId)));
-	addTooltips(ctx, mappings, { pct100: pct && (family === 'bar' || family === 'area'), family });
-	const detail = detailDims(ctx, [item, series, ...(combined?.levels ?? [])].filter(Boolean)).map((c) => c.pillId);
+	const detail = detailDims(ctx, [item, series, ...(combined?.levels ?? []), ...(trellis?.group2Levels ?? []), ...groups].filter(Boolean)).map((c) => c.pillId);
+	const combinedLevels = [...(combined?.levels ?? []), ...(trellis?.group2Levels ?? [])].map((c) => c.pillId);
+	addTooltips(ctx, mappings, { pct100: pct && (family === 'bar' || family === 'area'), family, grouped: [...detail, ...(out.sortOnly ?? []), ...combinedLevels] });
 	const v = horizontal ? 'horiz' : 'vert';
+	const bar = (chartType) => ({ chartType, family, mappings, detail, ...(trellis ? { overrides: { show_as_trellis: 'Trellis Categories' } } : {}) });
 
 	if (family === 'combo' && out.memberLines) {
 		const { seriesPillId, members } = out.memberLines;
@@ -807,12 +951,12 @@ function axisChart(ctx, family, dualPanes) {
 		if (!series) return { chartType: 'badge_vert_area_overlay', family, mappings, detail };
 		return { chartType: pct ? 'badge_vert_100pct_area' : 'badge_stackedtrend', family, mappings, detail };
 	}
-	if (!series && !measureSeries) return { chartType: `badge_${v}_bar`, family, mappings, detail };
-	if (pct) return { chartType: `badge_${v}_100pct`, family, mappings, detail };
+	if (!series && !measureSeries) return bar(`badge_${v}_bar`);
+	if (pct) return bar(`badge_${v}_100pct`);
 	const measureNamesOnColor = (ws.panes ?? []).some((pane) => (pane.encodings?.color ?? []).some((id) => /Measure Names/.test(id)));
-	if (measureSeries && measureNamesOnColor) return { chartType: `badge_${v}_stackedbar`, family, mappings, detail };
+	if (measureSeries && measureNamesOnColor) return bar(`badge_${v}_stackedbar`);
 	const sideBySide = measureSeries || nested || Boolean(paneSeries) || colorDims.some((c) => sameField(c, series) && axis.some((x) => sameField(x, c)));
-	return { chartType: sideBySide ? `badge_${v}_multibar` : `badge_${v}_stackedbar`, family, mappings, detail };
+	return bar(sideBySide ? `badge_${v}_multibar` : `badge_${v}_stackedbar`);
 }
 
 /** Measures only (no dimension anywhere): a KPI. */
@@ -852,7 +996,7 @@ function textTable(ctx) {
 	const markDims = [...a.get('text'), ...a.get('label')].filter(isDim);
 	if (!rowDims.length && !colDims.length && !markDims.length) return kpi(ctx, measures);
 	const colorMeasure = a.get('color').find((c) => c.kind === 'measure');
-	if (colorMeasure) out.warnings.push(issue(ws, 'warning', 'chart.highlight-table', `Highlight table color (${nameOf(colorMeasure)}) needs a conditional format in Domo`));
+	const colored = (result) => tableColor(ctx, result, colorMeasure);
 	// A table cannot hide a column, but its sorts may use a field it does not show: a hidden header sorts only.
 	const hidden = new Set(ws.hiddenHeaders ?? []);
 	const values = measures.filter((c) => !hidden.has(c.pillId));
@@ -868,13 +1012,89 @@ function textTable(ctx) {
 	if (pivot) {
 		const rows = rowDims.filter(shown);
 		const cols = colDims.filter(shown);
-		if (rows.length >= CROSSTAB_ROW_HEADERS && cols.length) return withSortOnly(crosstabTable(ctx, rows, cols, values));
+		if (rows.length >= CROSSTAB_ROW_HEADERS && cols.length) return colored(withSortOnly(crosstabTable(ctx, rows, cols, values)));
+		if (spreadsHighlight(ctx, cols, values, colorMeasure)) return colored(withSortOnly(crosstabTable(ctx, rows, cols, values, { highlight: true })));
 		const mappings = [...rows.map((c) => axisSlot(c, 'ROW', 'pivot')), ...cols.map((c) => axisSlot(c, 'COLUMN', 'pivot')), ...values.map((m) => slot(m, 'VALUE', 'measure'))];
 		if (rows.length + cols.length > 10) out.warnings.push(issue(ws, 'warning', 'chart.pivot-limit', 'Domo pivot tables take at most 10 row and column fields'));
-		return withSortOnly({ chartType: 'badge_pivot_table', family: 'pivot', mappings, detail: detailDims(ctx, [...rowDims, ...colDims]).map((c) => c.pillId) });
+		return colored(withSortOnly({ chartType: 'badge_pivot_table', family: 'pivot', mappings, detail: detailDims(ctx, [...rowDims, ...colDims]).map((c) => c.pillId) }));
 	}
 	const flat = withSortOnly(flatTable(ctx, [...rowDims, ...colDims, ...markDims], values, shown));
-	return kept.length ? { ...flat, keptHeaders: kept.map((c) => c.pillId) } : flat;
+	return colored(kept.length ? { ...flat, keptHeaders: kept.map((c) => c.pillId) } : flat);
+}
+
+function colorScale(ctx, colorMeasure) {
+	const enc = ctx.ws.color;
+	return colorMeasure && enc?.pillId === colorMeasure.pillId ? enc : undefined;
+}
+
+/** Without an encoding, Tableau colors a continuous measure with a gradient and a discrete one by member. */
+const isGradient = (scale, colorMeasure) => (scale ? scale.type !== 'palette' : colorMeasure.pill.continuous !== false);
+
+const PALE_LUMINANCE = 0.6;
+const PALE_CONTRAST = 1.5;
+
+function luminance(hex) {
+	const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * A listed gradient whose colors are all light and barely tell apart (WCAG relative luminance and contrast ratio), so the
+ * Tableau sheet reads as a plain table. A named built-in palette always has a dark end. Pure.
+ * @param {import('../model/types.js').ColorEncodingIR} [encoding]
+ * @returns {boolean}
+ */
+export function paleScale(encoding) {
+	const colors = (encoding?.type === 'palette' ? [] : (encoding?.colors ?? [])).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
+	if (!colors.length) return false;
+	const levels = colors.map(luminance);
+	const low = Math.min(...levels);
+	return low >= PALE_LUMINANCE && (Math.max(...levels) + 0.05) / (low + 0.05) < PALE_CONTRAST;
+}
+
+/**
+ * What a table does with Tableau's color measure: a pale scale is left off, a Mega Table crosstab colors the measure's
+ * columns as heatmap columns, a pivot or flat table cannot show a scale.
+ */
+function tableColor(ctx, result, colorMeasure) {
+	if (!colorMeasure) return result;
+	const { ws, out } = ctx;
+	const scale = colorScale(ctx, colorMeasure);
+	const name = pillLabel(ws, ctx.ir, colorMeasure.pillId);
+	if (paleScale(scale)) {
+		out.warnings.push(issue(ws, 'info', 'chart.highlight-table', `The color scale of ${name} (${scale.colors[0]} to ${scale.colors.at(-1)}) is nearly invisible in Tableau; left off`));
+		return result;
+	}
+	const valueColumn = result.mappings.some((s) => s.pillId === colorMeasure.pillId && s.role !== 'dim') || result.spread?.measure === colorMeasure.pillId;
+	if (result.family === 'crosstab' && valueColumn && isGradient(scale, colorMeasure)) {
+		const totals = scale?.includeTotals ? '; Domo does not color totals' : '';
+		out.warnings.push(issue(ws, 'info', 'chart.highlight-table', `The color scale of ${name} is drawn as Mega Table heatmap columns in Domo's theme gradients, not Tableau's colors${totals}`));
+		return { ...result, heatmap: { pillIds: [colorMeasure.pillId] } };
+	}
+	if (result.family === 'pivot') {
+		out.warnings.push(issue(ws, 'warning', 'chart.highlight-table', `Domo pivot tables have no color scale; the Tableau colors by ${name} are left off`, 'Switch the card to a Mega Table in Analyzer for heatmap columns.'));
+	} else {
+		out.warnings.push(issue(ws, 'warning', 'chart.highlight-table', `Highlight table color (${name}) needs a conditional format in Domo`));
+	}
+	return result;
+}
+
+/** The members Tableau lists for a header (a manual sort), when there are few enough to spread into columns. */
+function spreadableMembers(ws, c) {
+	const sort = (ws.sorts ?? []).find((s) => s.pillId === c.pillId && s.kind === 'manual');
+	const members = (sort?.order ?? []).filter((v) => v !== null && v !== undefined);
+	return members.length <= MAX_SPREAD_MEMBERS ? members : [];
+}
+
+/**
+ * A highlight table with one column header Tableau lists the members of, colored by its only value, keeps Tableau's grid
+ * and its color as a Mega Table with that header spread into member columns (pivot column subtotals are lost).
+ */
+function spreadsHighlight(ctx, cols, values, colorMeasure) {
+	if (!colorMeasure || cols.length !== 1 || cols[0].kind === 'date' || values.length !== 1) return false;
+	if (values[0].pill.tableCalc || measureKey(values[0].pill) !== measureKey(colorMeasure.pill)) return false;
+	const scale = colorScale(ctx, colorMeasure);
+	return isGradient(scale, colorMeasure) && !paleScale(scale) && spreadableMembers(ctx.ws, cols[0]).length > 0;
 }
 
 /** Visible row headers from which a crosstab is a listing (a Mega Table) rather than a Domo pivot. */
@@ -887,16 +1107,16 @@ export const CROSSTAB_ROW_HEADERS = 4;
  * ones; the innermost column header is spread into one value column per member when Tableau lists its members (a
  * manual sort) and one measure is shown (`spread`, built by cards.js), else it is one more column.
  */
-function crosstabTable(ctx, rows, cols, values) {
+function crosstabTable(ctx, rows, cols, values, { highlight = false } = {}) {
 	const { ws, out } = ctx;
 	const inner = cols.at(-1);
-	const sort = (ws.sorts ?? []).find((s) => s.pillId === inner.pillId && s.kind === 'manual');
-	const members = (sort?.order ?? []).filter((v) => v !== null && v !== undefined);
-	const spread = values.length === 1 && members.length > 0 && members.length <= MAX_SPREAD_MEMBERS;
+	const members = spreadableMembers(ws, inner);
+	const spread = values.length === 1 && members.length > 0;
 	const dims = spread ? [...rows, ...cols.slice(0, -1)] : [...rows, ...cols];
 	const mappings = [...dims.map((c) => slot(c, 'VALUE', 'dim', c.collapsedTrunc ? { dateTrunc: c.collapsedTrunc } : {})), ...values.map((m) => slot(m, 'VALUE', 'measure'))];
 	const how = spread ? `, ${nameOf(inner)} spread into one column per member` : '';
-	out.warnings.push(issue(ws, 'info', 'chart.crosstab-table', `Crosstab with ${rows.length} row headers shown as a Mega Table (a Domo pivot reads at most 10,000 rows)${how}`));
+	const why = highlight ? 'Highlight table shown as a Mega Table to keep its color as heatmap columns (pivot column subtotals are not kept)' : `Crosstab with ${rows.length} row headers shown as a Mega Table (a Domo pivot reads at most 10,000 rows)`;
+	out.warnings.push(issue(ws, 'info', 'chart.crosstab-table', `${why}${how}`));
 	const result = { chartType: 'badge_basic_table', family: 'crosstab', mappings, detail: detailDims(ctx, [...rows, ...cols]).map((c) => c.pillId) };
 	if (spread) result.spread = { pillId: inner.pillId, members, measure: values[0].pillId };
 	return result;
@@ -944,6 +1164,20 @@ function pie(ctx, dualPane) {
 	return { chartType: dualPane ? 'badge_donut' : 'badge_pie', family: 'pie', mappings };
 }
 
+/**
+ * A Square crosstab whose numbers are the content (a measure on Text or Label) is a highlight table, not a heat map, once
+ * a heat map would drop headers or label measures; so is one whose color scale is too pale to read.
+ */
+function highlightTable(ctx, colorMeasure, value) {
+	const { a } = ctx;
+	const headers = Math.max(collapseDateParts(a.rowDims).length, collapseDateParts(a.colDims).length);
+	const texts = [...a.get('text'), ...a.get('label')].filter((c) => c.kind === 'measure');
+	const extra = uniq(texts.map((c) => measureKey(c.pill)).filter((key) => key !== measureKey(value.pill)));
+	return (texts.length > 0 && (headers > 1 || extra.length > EXTRA_SLOTS)) || paleScale(colorScale(ctx, colorMeasure));
+}
+
+const EXTRA_SLOTS = 3;
+
 function square(ctx) {
 	const { a, ws, out } = ctx;
 	const colorMeasure = a.get('color').find((c) => c.kind === 'measure');
@@ -951,7 +1185,7 @@ function square(ctx) {
 	const textMeasure = textMeasures(a)[0];
 	if (a.rowDims.length && a.colDims.length && !a.rowMeasures.length && !a.colMeasures.length) {
 		const value = colorMeasure ?? textMeasure ?? sizeMeasure;
-		if (!value) return textTable(ctx);
+		if (!value || highlightTable(ctx, colorMeasure, value)) return textTable(ctx);
 		const item = a.colDims.at(-1);
 		const series = a.rowDims.at(-1);
 		const dropped = [...a.colDims.slice(0, -1), ...a.rowDims.slice(0, -1)];

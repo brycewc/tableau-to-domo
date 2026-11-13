@@ -66,7 +66,8 @@ function build({ type, commas, precision, currency, percentMultiplied = true, ab
 /**
  * The Domo column format for a Tableau number format, or undefined when it has none (dates, scientific, standard number,
  * text). Covers the currency symbol, decimals, thousands separators, percent (multiplied, or a literal "%" suffix) and
- * display units (scaling commas for K, M, B become Domo's automatic abbreviation). Other text around the number is dropped.
+ * display units (scaling commas for K, M, B become Domo's automatic abbreviation, with at least 2 decimals). Other text
+ * around the number is dropped.
  * @param {string|undefined} text  e.g. 'c"$"#,##0;("$"#,##0)', 'p0.0%', 'n#,##0,,.00M;-#,##0,,.00M', 'C1033%'
  * @returns {Object|undefined}
  */
@@ -95,7 +96,8 @@ export function domoNumberFormat(text) {
 	const [intPart, decPart = ''] = body.split('.');
 	const scaled = /,+$/.test(intPart) || /,+$/.test(decPart);
 	const commas = intPart.replace(/,+$/, '').includes(',');
-	const precision = Math.min(decPart.replace(/,+$/, '').length, 10);
+	const places = Math.min(decPart.replace(/,+$/, '').length, 10);
+	const precision = scaled ? Math.max(places, 2) : places;
 	const percentPattern = parts.some((t) => t.pattern === '%');
 	const percentLiteral = after.some((t) => t.literal?.trim().startsWith('%'));
 	// Only scaling commas divide ("#,##0,,M" is millions); a bare unit letter is text.

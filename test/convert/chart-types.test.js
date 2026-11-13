@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { inferChart, classifyPill } from '../../src/convert/chart-types.js';
+import { inferChart, classifyPill, slotMacro, pillLabel, paleScale } from '../../src/convert/chart-types.js';
 import { DS, p, sheet, workbook, makeBindings } from './cards.fixtures.test.js';
 
 const SALES = p('sum', 'Sales', 'qk');
@@ -151,10 +151,10 @@ test('two measures on columns of a horizontal bar never leave a measure in SERIE
 
 test('a color measure on a bar is never a SERIES column', () => {
 	const r = infer({ cols: CATEGORY, mark: 'Bar', enc: { label: [SALES], color: [PROFIT] } });
-	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[sum:Profit:qk]'], 'the default tooltip still shows the color measure');
 	assert.ok(codes(r).includes('chart.color-measure'));
 	const shelf = infer({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { color: [PROFIT] } });
-	assert.deepEqual(slots(shelf), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(shelf), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[sum:Profit:qk]']);
 	assert.ok(codes(shelf).includes('chart.color-measure'));
 });
 
@@ -318,7 +318,7 @@ test('KPI: one measure is a single value, two use multi value', () => {
 test('treemap: square marks with no shelves', () => {
 	const r = infer({ mark: 'Square', enc: { label: [CATEGORY], size: [SALES], color: [PROFIT] } });
 	assert.equal(r.chartType, 'badge_treemap');
-	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'COLOR=[sum:Profit:qk]']);
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'COLOR=[sum:Profit:qk]', 'EXTRAINFO1=[sum:Profit:qk]']);
 });
 
 test('heat map: dimensions on both shelves with a color measure', () => {
@@ -328,12 +328,84 @@ test('heat map: dimensions on both shelves with a color measure', () => {
 	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'SERIES=[none:Region:nk]', 'VALUE=[sum:Sales:qk]']);
 });
 
+const SEGMENT = p('none', 'Segment');
+const SUB = p('none', 'Sub-Category');
+const CUSTOMER = p('none', 'Customer');
+const YEAR = p('none', 'Fiscal Year', 'ok');
+const DIFF = p('diff:sum', 'Sales', 'qk');
+const PALE = ['#ffffbf', '#f2f2f2', '#d9d9d9', '#ffffff'];
+const BLUES = ['#f7fbff', '#6baed6', '#08306b'];
+
+test('heat map: a one-by-one highlight table with a named palette stays a heat map with labels', () => {
+	const r = infer({ rows: REGION, cols: CATEGORY, mark: 'Square', enc: { color: [SALES], text: [SALES] }, color: { type: 'interpolated', palette: 'red_green_diverging_10_0', pillId: SALES } });
+	assert.equal(r.chartType, 'badge_heatmap');
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'SERIES=[none:Region:nk]', 'VALUE=[sum:Sales:qk]']);
+});
+
+test('highlight table: several headers and a text measure go to a pivot with every header', () => {
+	const spec = { rows: `${REGION} / ${CATEGORY}`, cols: `${YEAR} / (${SEGMENT} / ${SUB})`, mark: 'Square', enc: { color: [DIFF], text: [SALES, DIFF] } };
+	const r = infer(spec);
+	assert.equal(r.chartType, 'badge_pivot_table');
+	assert.deepEqual(r.mappings.map((m) => m.mapping), ['ROW', 'ROW', 'COLUMN', 'COLUMN', 'COLUMN', 'VALUE', 'VALUE']);
+	assert.ok(!codes(r).includes('chart.extra-dimension'));
+	const color = r.warnings.find((w) => w.code === 'chart.highlight-table');
+	assert.equal(color.severity, 'warning');
+	assert.match(color.message, /pivot tables have no color scale/);
+	assert.match(color.suggestion, /Mega Table/);
+
+	const pale = infer({ ...spec, color: { type: 'custom-interpolated', colors: PALE, pillId: DIFF } });
+	assert.equal(pale.chartType, 'badge_pivot_table');
+	const info = pale.warnings.find((w) => w.code === 'chart.highlight-table');
+	assert.equal(info.severity, 'info');
+	assert.match(info.message, /#ffffbf to #ffffff\) is nearly invisible/);
+});
+
+test('highlight table: a pale scale sends a one-by-one sheet to a table too', () => {
+	const r = infer({ rows: REGION, cols: CATEGORY, mark: 'Square', enc: { color: [SALES], text: [SALES] }, color: { type: 'custom-interpolated', colors: PALE, pillId: SALES } });
+	assert.equal(r.chartType, 'badge_pivot_table');
+});
+
+test('highlight table: a Mega Table crosstab colors its color measure as heatmap columns', () => {
+	const r = infer({ rows: `${REGION} / ${CATEGORY} / ${SUB} / ${CUSTOMER}`, cols: SEGMENT, mark: 'Square', enc: { color: [SALES], text: [SALES] }, color: { type: 'custom-interpolated', colors: BLUES, pillId: SALES } });
+	assert.equal(r.chartType, 'badge_basic_table');
+	assert.equal(r.family, 'crosstab');
+	assert.deepEqual(r.heatmap, { pillIds: [SALES] });
+	assert.match(r.warnings.find((w) => w.code === 'chart.highlight-table').message, /heatmap columns/);
+});
+
+test('heat map: several headers and a color measure without text keep the heat map and drop headers', () => {
+	const r = infer({ rows: `${REGION} / ${CATEGORY}`, cols: SEGMENT, mark: 'Square', enc: { color: [SALES] } });
+	assert.equal(r.chartType, 'badge_heatmap');
+	assert.ok(codes(r).includes('chart.extra-dimension'));
+});
+
+test('highlight table: one listed column header colored by its only value is a Mega Table spread into heatmap columns', () => {
+	const spec = { rows: `${REGION} / ${CATEGORY}`, cols: SEGMENT, mark: 'Square', enc: { color: [SALES], text: [SALES] }, sorts: [{ pillId: SEGMENT, kind: 'manual', direction: 'ASC', order: ['Corporate', 'Consumer'] }] };
+	const r = infer(spec);
+	assert.equal(r.chartType, 'badge_basic_table');
+	assert.equal(r.family, 'crosstab');
+	assert.deepEqual(r.spread, { pillId: SEGMENT, members: ['Corporate', 'Consumer'], measure: SALES });
+	assert.deepEqual(r.heatmap, { pillIds: [SALES] });
+	assert.match(r.warnings.find((w) => w.code === 'chart.crosstab-table').message, /^Highlight table shown as a Mega Table.*Segment spread/);
+	assert.equal(infer({ ...spec, sorts: [] }).chartType, 'badge_pivot_table', 'without a member list it stays a pivot');
+	assert.equal(infer({ ...spec, color: { type: 'custom-interpolated', colors: PALE, pillId: SALES } }).chartType, 'badge_pivot_table', 'a pale scale has no color to keep');
+	assert.equal(infer({ ...spec, enc: { color: [PROFIT], text: [SALES] } }).chartType, 'badge_pivot_table', 'the color measure is a second value');
+});
+
+test('paleScale: only a listed gradient of light, close colors is pale', () => {
+	assert.equal(paleScale({ type: 'custom-interpolated', colors: PALE }), true);
+	assert.equal(paleScale({ type: 'custom-interpolated', colors: BLUES }), false);
+	assert.equal(paleScale({ type: 'interpolated', palette: 'blue_10_0' }), false);
+	assert.equal(paleScale(undefined), false);
+});
+
 test('gantt: task on rows, date on columns, size duration', () => {
 	const r = infer({ rows: CATEGORY, cols: p('tdy', 'Order Date', 'qk'), mark: 'GanttBar', enc: { size: [p('sum', 'Duration', 'qk')], color: [REGION] } });
 	assert.equal(r.chartType, 'badge_gantt');
 	assert.deepEqual(
 		r.mappings.map((m) => m.mapping),
-		['ITEM', 'START_DATE', 'END_DATE', 'CATEGORY']
+		['ITEM', 'START_DATE', 'END_DATE', 'CATEGORY', 'EXTRAINFO1'],
+		'the default tooltip shows the size measure'
 	);
 	assert.equal(r.mappings[2].derived.type, 'date-add');
 });
@@ -398,8 +470,7 @@ test('a lone pane-splitting dimension with no other series is the SERIES and dra
 
 test('a pane-splitting dimension is nested into the axis only when Color holds another series dimension', () => {
 	const r = infer({ rows: `${REGION} * ${SALES}`, cols: CATEGORY, mark: 'Bar', enc: { color: [p('none', 'Segment')] } });
-	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]']);
-	assert.deepEqual(r.mappings[0].derived, { type: 'concat', pillIds: [REGION, CATEGORY] });
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Region:nk]']);
 	assert.equal(r.chartType, 'badge_vert_stackedbar');
 	assert.ok(r.warnings.some((w) => w.code === 'chart.small-multiples' && /nested into the category axis/.test(w.message)));
 });
@@ -500,28 +571,29 @@ test('a color dimension takes the series from a nested category level whose head
 	ws.hiddenHeaders = [CATEGORY];
 	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
 	assert.equal(r.chartType, 'badge_vert_stackedbar');
-	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[none:Category:nk]'], 'the hidden level still shows in the default tooltip');
+	assert.equal(r.mappings.at(-1).role, 'dim');
 	assert.deepEqual(r.sortOnly, [CATEGORY]);
 });
 
-test('visible category levels with a color on none of them combine into one ITEM, stacked by the color', () => {
+test('visible category levels with a color on none of them draw as trellis categories, stacked by the color', () => {
 	const SEGMENT = p('none', 'Segment');
 	const r = infer({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, enc: { color: [SEGMENT] } });
 	assert.equal(r.chartType, 'badge_vert_stackedbar');
-	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]']);
-	assert.deepEqual(r.mappings[0].derived, { type: 'concat', pillIds: [REGION, CATEGORY] });
-	assert.deepEqual(codes(r), ['chart.combined-category']);
-	assert.match(r.warnings[0].message, /Region, Category are combined into one category \(Region \+ Category/);
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Region:nk]']);
+	assert.ok(r.mappings.every((m) => !m.derived));
+	assert.deepEqual(r.overrides, { show_as_trellis: 'Trellis Categories' });
+	assert.deepEqual(codes(r), ['chart.trellis']);
+	assert.match(r.warnings[0].message, /^Region draws as trellis categories over Category, as Tableau's header bands$/);
 
 	const ACCOUNT_ID = p('none', 'AccountID');
 	const ACCOUNT = p('none', 'AccountName');
 	const horiz = infer({ rows: `${ACCOUNT_ID} / ${ACCOUNT}`, cols: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
 	assert.equal(horiz.chartType, 'badge_horiz_stackedbar');
-	assert.deepEqual(horiz.mappings[0].derived.pillIds, [ACCOUNT_ID, ACCOUNT]);
-	assert.ok(slots(horiz).includes('SERIES=[none:Segment:nk]'));
+	assert.deepEqual(slots(horiz), ['ITEM=[none:AccountName:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:AccountID:nk]']);
 });
 
-test('a color on an inner level keeps the side-by-side nesting; three levels combine the outer ones', () => {
+test('a color on an inner level keeps the side-by-side nesting; three levels draw as two trellis groups', () => {
 	const SEGMENT = p('none', 'Segment');
 	const inner = infer({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [CATEGORY] } });
 	assert.equal(inner.chartType, 'badge_vert_multibar');
@@ -529,9 +601,8 @@ test('a color on an inner level keeps the side-by-side nesting; three levels com
 	assert.ok(slots(inner).includes('SERIES=[none:Category:nk]'));
 
 	const three = infer({ cols: `${REGION} / ${CATEGORY} / ${SEGMENT}`, rows: SALES, mark: 'Bar' });
-	assert.equal(three.chartType, 'badge_vert_multibar');
-	assert.deepEqual(three.mappings[0].derived.pillIds, [REGION, CATEGORY]);
-	assert.ok(slots(three).includes('SERIES=[none:Segment:nk]'));
+	assert.equal(three.chartType, 'badge_vert_bar');
+	assert.deepEqual(slots(three), ['ITEM=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Category:nk]', 'GROUP2=[none:Region:nk]']);
 	assert.ok(!codes(three).includes('chart.extra-dimension'));
 
 	const colored = infer({ cols: `${REGION} / ${CATEGORY} / ${SEGMENT}`, rows: SALES, mark: 'Bar', enc: { color: [CATEGORY] } });
@@ -546,14 +617,14 @@ test('a one-member level sorts only; one visible level left keeps the color swap
 	ws.filters = [{ fieldId: '[Ship Mode]', kind: 'categorical', include: ['First Class'] }];
 	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
 	assert.equal(r.chartType, 'badge_vert_stackedbar');
-	assert.deepEqual(r.mappings[0].derived.pillIds, [REGION, CATEGORY]);
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Region:nk]', 'EXTRAINFO1=[none:Ship Mode:nk]']);
 	assert.deepEqual(r.sortOnly, [SHIP]);
 
 	const two = sheet({ cols: `${REGION} / ${SHIP}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
 	two.filters = [{ fieldId: '[Ship Mode]', kind: 'categorical', include: ['First Class'] }];
 	const swap = inferChart(two, workbook({ worksheets: [two] }), makeBindings());
 	assert.equal(swap.mappings[0].derived, undefined);
-	assert.deepEqual(slots(swap), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(swap), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[none:Ship Mode:nk]']);
 	assert.deepEqual(swap.sortOnly, [SHIP]);
 
 	const dated = infer({ cols: `${p('yr', 'Order Date', 'ok')} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
@@ -562,7 +633,7 @@ test('a one-member level sorts only; one visible level left keeps the color swap
 	const nested = sheet({ cols: `${SHIP} / ${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [CATEGORY] } });
 	nested.filters = [{ fieldId: '[Ship Mode]', kind: 'categorical', include: ['First Class'] }];
 	const kept = inferChart(nested, workbook({ worksheets: [nested] }), makeBindings());
-	assert.deepEqual(slots(kept), ['ITEM=[none:Region:nk]', 'SERIES=[none:Category:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(kept), ['ITEM=[none:Region:nk]', 'SERIES=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[none:Ship Mode:nk]']);
 	assert.deepEqual(kept.sortOnly, [SHIP]);
 	assert.ok(!codes(kept).includes('chart.combined-category') && !kept.warnings.some((w) => /dropped/.test(w.message)));
 });
@@ -578,17 +649,24 @@ test('levels beside a pane series on the value shelf combine into the ITEM inste
 	assert.ok(!codes(two).includes('chart.extra-dimension'));
 });
 
-test('a filter action on a combined level keeps the nested levels, with a warning', () => {
+test('a filter action on a trellis level needs no combined column; on levels GROUP2 would combine it keeps them nested, with a warning', () => {
 	const SEGMENT = p('none', 'Segment');
 	const ws = sheet({ cols: `${REGION} / ${CATEGORY}`, rows: SALES, mark: 'Bar', enc: { color: [SEGMENT] } });
 	const ir = workbook({ worksheets: [ws] });
 	ir.actions = [{ id: '[A1]', name: 'By category', type: 'filter', trigger: 'select', source: { type: 'sheet', worksheets: [ws.name] }, fields: [{ source: '[Category]', target: '[Category]' }] }];
 	const r = inferChart(ws, ir, makeBindings());
-	assert.equal(r.mappings[0].derived, undefined);
-	assert.equal(r.chartType, 'badge_vert_multibar');
-	assert.ok(r.warnings.some((w) => w.code === 'chart.combined-category' && w.severity === 'warning' && /action By category/.test(w.message)));
-	ir.actions[0].source.worksheets = ['Other'];
-	assert.ok(inferChart(ws, ir, makeBindings()).mappings[0].derived);
+	assert.ok(slots(r).includes('GROUP1=[none:Region:nk]'));
+	assert.deepEqual(codes(r), ['chart.trellis']);
+
+	const SHIP = p('none', 'Ship Mode');
+	const four = sheet({ cols: `${REGION} / ${CATEGORY} / ${SHIP} / ${SEGMENT}`, rows: SALES, mark: 'Bar' });
+	const fourIr = workbook({ worksheets: [four] });
+	fourIr.actions = [{ ...ir.actions[0], source: { type: 'sheet', worksheets: [four.name] } }];
+	const kept = inferChart(four, fourIr, makeBindings());
+	assert.ok(!kept.mappings.some((m) => m.mapping.startsWith('GROUP')));
+	assert.ok(kept.warnings.some((w) => w.code === 'chart.combined-category' && w.severity === 'warning' && /action By category/.test(w.message)));
+	fourIr.actions[0].source.worksheets = ['Other'];
+	assert.deepEqual(inferChart(four, fourIr, makeBindings()).mappings.find((m) => m.mapping === 'GROUP2').derived, { type: 'concat', pillIds: [REGION, CATEGORY] });
 });
 
 test('percent of total along an inner combined level and the color is no 100% chart', () => {
@@ -607,13 +685,103 @@ test('a hidden axis level takes no slot: the next visible level or the color is 
 	ws.hiddenHeaders = [CATEGORY];
 	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
 	assert.equal(r.chartType, 'badge_horiz_multibar', 'a nested visible level draws side-by-side bars, as Tableau does');
-	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]']);
+	assert.deepEqual(slots(r), ['ITEM=[none:Region:nk]', 'SERIES=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[none:Category:nk]']);
 	assert.deepEqual(r.sortOnly, [CATEGORY]);
 	assert.deepEqual(r.warnings.map((w) => w.code), ['chart.hidden-level']);
 	const noColor = sheet({ rows: `${REGION} / ${CATEGORY} / ${SEGMENT}`, cols: SALES, mark: 'Bar' });
 	noColor.hiddenHeaders = [CATEGORY];
-	assert.ok(slots(inferChart(noColor, workbook({ worksheets: [noColor] }), makeBindings())).includes('SERIES=[none:Segment:nk]'));
+	const trellis = inferChart(noColor, workbook({ worksheets: [noColor] }), makeBindings());
+	assert.deepEqual(slots(trellis), ['ITEM=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Region:nk]', 'EXTRAINFO1=[none:Category:nk]']);
 	const allHidden = sheet({ cols: REGION, rows: SALES, mark: 'Bar' });
 	allHidden.hiddenHeaders = [REGION];
 	assert.ok(slots(inferChart(allHidden, workbook({ worksheets: [allHidden] }), makeBindings())).includes('ITEM=[none:Region:nk]'), 'a lone hidden level stays the axis');
+});
+
+const FYQ = p('none', 'Fiscal Year');
+const FYP = p('none', 'Customer');
+const CNTD = p('ctd', 'Customer', 'qk');
+const ARR = p('sum', 'Sales', 'qk');
+
+function nestedLabeled(extra = {}) {
+	const ws = sheet({ cols: `${FYQ} / ${FYP}`, rows: CNTD, mark: 'Bar', enc: { text: [ARR, CNTD] }, ...extra });
+	ws.panes[0].showLabels = true;
+	return ws;
+}
+
+test('nested header levels with no color draw as trellis categories; the labeled measure takes EXTRAINFO1', () => {
+	const ws = nestedLabeled();
+	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
+	assert.equal(r.chartType, 'badge_vert_bar');
+	assert.deepEqual(slots(r), ['ITEM=[none:Customer:nk]', 'VALUE=[ctd:Customer:qk]', 'GROUP1=[none:Fiscal Year:nk]', 'EXTRAINFO1=[sum:Sales:qk]']);
+	assert.deepEqual(r.overrides, { show_as_trellis: 'Trellis Categories' });
+	assert.deepEqual(codes(r), ['chart.trellis']);
+	assert.equal(r.warnings[0].severity, 'info');
+});
+
+test('four nested levels: GROUP2 combines the outer two levels', () => {
+	const SEGMENT = p('none', 'Segment');
+	const r = infer({ cols: `${REGION} / ${CATEGORY} / ${FYQ} / ${SEGMENT}`, rows: SALES, mark: 'Bar' });
+	assert.equal(r.chartType, 'badge_vert_bar');
+	assert.deepEqual(slots(r).slice(0, 4), ['ITEM=[none:Segment:nk]', 'VALUE=[sum:Sales:qk]', 'GROUP1=[none:Fiscal Year:nk]', 'GROUP2=[none:Region:nk]']);
+	assert.deepEqual(r.mappings[3].derived, { type: 'concat', pillIds: [REGION, CATEGORY] });
+	assert.ok(slots(r).includes('EXTRAINFO1=[none:Category:nk]'), 'the default tooltip names the combined part through EXTRAINFO');
+	assert.match(r.warnings.find((w) => w.code === 'chart.trellis').message, /^Region, Category, Fiscal Year draw as trellis categories over Segment/);
+});
+
+test('label measures take EXTRAINFO before tooltip measures; the overflow names each dropped field and its source', () => {
+	const QTY = p('sum', 'Quantity', 'qk');
+	const DUR = p('sum', 'Duration', 'qk');
+	const ws = sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { tooltip: [QTY, DUR], label: [PROFIT, p('avg', 'Sales', 'qk')] } });
+	ws.panes[0].showLabels = true;
+	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
+	assert.deepEqual(slots(r).slice(2), ['EXTRAINFO1=[sum:Profit:qk]', 'EXTRAINFO2=[avg:Sales:qk]', 'EXTRAINFO3=[sum:Duration:qk]'], 'tooltip measures in default tooltip order');
+	const overflow = r.warnings.find((w) => w.code === 'chart.tooltip');
+	assert.equal(overflow.severity, 'info');
+	assert.match(overflow.message, /Quantity \(tooltip\) dropped$/);
+
+	const labels = sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { label: [PROFIT, QTY, DUR, p('avg', 'Sales', 'qk')] } });
+	labels.panes[0].showLabels = true;
+	const dropped = inferChart(labels, workbook({ worksheets: [labels] }), makeBindings()).warnings.find((w) => w.code === 'chart.tooltip');
+	assert.equal(dropped.severity, 'warning', 'a dropped label field loses part of the label');
+	assert.match(dropped.message, /Sales \(label\) dropped$/);
+});
+
+test('a tooltip dimension the card groups by takes an EXTRAINFO slot and a %_TOOLTIPn macro; an ungrouped one does not', () => {
+	const SEGMENT = p('none', 'Segment');
+	const ws = sheet({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { detail: [SEGMENT], tooltip: [REGION] } });
+	const ir = workbook({ worksheets: [ws] });
+	const r = inferChart(ws, ir, makeBindings());
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[none:Segment:nk]']);
+	assert.equal(r.mappings[2].role, 'dim');
+	assert.deepEqual(slotMacro(ws, ir, SEGMENT, r.mappings), { macro: '%_TOOLTIP1' });
+	assert.equal(slotMacro(ws, ir, REGION, r.mappings), undefined);
+	assert.ok(r.warnings.some((w) => w.code === 'chart.tooltip' && /Tooltip dimensions \(Region\) are not carried over/.test(w.message)));
+});
+
+test('an ATTR tooltip dimension takes an EXTRAINFO slot as a measure', () => {
+	const r = infer({ cols: CATEGORY, rows: SALES, mark: 'Bar', enc: { tooltip: [p('attr', 'Region')] } });
+	assert.deepEqual(slots(r), ['ITEM=[none:Category:nk]', 'VALUE=[sum:Sales:qk]', 'EXTRAINFO1=[attr:Region:nk]']);
+	assert.equal(r.mappings[2].role, 'measure');
+	assert.ok(!codes(r).includes('chart.tooltip'));
+});
+
+test("tooltip-mode 'none' allocates no tooltip slots; label slots stay", () => {
+	const ws = nestedLabeled({ enc: { text: [ARR, CNTD], tooltip: [PROFIT] } });
+	ws.tooltipMode = 'none';
+	const r = inferChart(ws, workbook({ worksheets: [ws] }), makeBindings());
+	assert.deepEqual(slots(r).filter((s) => s.startsWith('EXTRAINFO')), ['EXTRAINFO1=[sum:Sales:qk]']);
+	delete ws.tooltipMode;
+	assert.deepEqual(slots(inferChart(ws, workbook({ worksheets: [ws] }), makeBindings())).filter((s) => s.startsWith('EXTRAINFO')), ['EXTRAINFO1=[sum:Sales:qk]', 'EXTRAINFO2=[sum:Profit:qk]']);
+});
+
+test('pillLabel names a quick table calculation the way Tableau does', () => {
+	const ids = [p('pcto:cnt', 'Customer', 'qk'), p('pcto:sum', 'Sales', 'qk'), p('cum:sum', 'Sales', 'qk'), p('diff:sum', 'Profit', 'qk'), p('pcdf:avg', 'Sales', 'qk'), p('rank:sum', 'Sales', 'qk'), p('pcrk:sum', 'Sales', 'qk'), p('sum', 'Sales', 'qk')];
+	const ws = sheet({ rows: ids.join(' + '), cols: p('none', 'Region') });
+	const ir = workbook({ worksheets: [ws] });
+	assert.deepEqual(
+		ids.map((id) => pillLabel(ws, ir, id)),
+		['% of Total Count of Customer', '% of Total Sales', 'Running Sum of Sales', 'Difference in Profit', '% Difference in Avg. Sales', 'Rank of Sales', 'Percentile of Sales', 'Sales']
+	);
+	ws.pills[ids[2]].tableCalc.secondary = { type: 'PctTotal' };
+	assert.equal(pillLabel(ws, ir, ids[2]), '% of Total Running Sum of Sales');
 });

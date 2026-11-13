@@ -21,12 +21,14 @@ test('Tableau currency formats: symbol, decimals, separators', () => {
 	assert.deepEqual(domoNumberFormat('C9999%'), number(2), 'an unknown locale keeps the decimals, not a guessed symbol');
 });
 
-test('Tableau display units become abbreviation; a bare unit letter is text', () => {
-	assert.deepEqual(domoNumberFormat('c"$"#,##0,K;("$"#,##0,K)'), currency(0, '$', true));
+test('Tableau display units become abbreviation with at least two decimals; a bare unit letter is text', () => {
+	assert.deepEqual(domoNumberFormat('c"$"#,##0,K;("$"#,##0,K)'), currency(2, '$', true));
 	assert.deepEqual(domoNumberFormat('c"$"#,##0,,.00M;("$"#,##0,,.00M)'), currency(2, '$', true));
-	assert.deepEqual(domoNumberFormat('n#,##0,,.0M;-#,##0,,.0M'), number(1, true, { abbreviate: true }));
-	assert.deepEqual(domoNumberFormat('[>=1000000]$0.0,,"M";[<=-1000000]($0.0,,"M");$#,##0'), { type: 'currency', format: '#.0', commas: false, percentMultiplied: true, precision: 1, currency: '$', abbreviate: true }, 'conditions are dropped, the first section is read');
+	assert.deepEqual(domoNumberFormat('c"$"#,##0,,.000M;("$"#,##0,,.000M)'), currency(3, '$', true));
+	assert.deepEqual(domoNumberFormat('n#,##0,,.0M;-#,##0,,.0M'), number(2, true, { abbreviate: true }));
+	assert.deepEqual(domoNumberFormat('[>=1000000]$0.0,,"M";[<=-1000000]($0.0,,"M");$#,##0'), { type: 'currency', format: '#.00', commas: false, percentMultiplied: true, precision: 2, currency: '$', abbreviate: true }, 'conditions are dropped, the first section is read');
 	assert.deepEqual(domoNumberFormat('*#,##0.0K'), number(1), 'no scaling comma');
+	assert.deepEqual(domoNumberFormat('c"$"#,##0;("$"#,##0)'), currency(0), 'an unscaled format keeps its decimals');
 });
 
 test('Tableau percent and plain number formats', () => {

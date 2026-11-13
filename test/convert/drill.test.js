@@ -50,6 +50,15 @@ test('the series drills when the axis is not a hierarchy level', () => {
 	assert.equal(itemOf(card.drillPath[0].body), 'Region');
 });
 
+test('a trellis group on a hierarchy level drills when the axis is not one', () => {
+	const { card } = plan({ cols: `${p('none', 'Category')} / ${p('none', 'Region')}`, rows: SALES, mark: 'Bar' });
+	const group = (body) => body.definition.subscriptions.main.columns.find((c) => c.mapping === 'GROUP1')?.column;
+	assert.equal(itemOf(card.body), 'Region');
+	assert.equal(group(card.body), 'Category');
+	assert.deepEqual(card.drillPath.map((d) => group(d.body)), ['Sub-Category', 'Customer']);
+	assert.equal(itemOf(card.drillPath[0].body), 'Region');
+});
+
 test('the deepest level has nothing to drill to; table drill stays on for a plain chart', () => {
 	const { card, issues } = plan({ cols: p('none', 'Customer'), rows: SALES, mark: 'Bar' });
 	assert.equal(card.drillPath, undefined);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { MAX_COLOR_RULES, TABLEAU_PALETTES, cardColorRules, paletteJson, workbookPalette } from '../../src/convert/colors.js';
+import { MAX_COLOR_RULES, TABLEAU_PALETTES, cardColorRules, heatmapOverrides, paletteJson, workbookPalette } from '../../src/convert/colors.js';
 import { controlItemStyle, planItemStyles, zoneItemStyle } from '../../src/convert/app-layout.js';
 import { applyItemStyles } from '../../src/domo/apps.js';
 
@@ -167,4 +167,17 @@ test('a line pane colored by Measure Names under bars colored by a dimension tak
 	const { rules, issues } = cardColorRules(ws, { family: 'combo', slots: comboSlots, dataSourceId: DS });
 	assert.deepEqual(rules, [{ condition: { column: 'Ratio', values: [], operand: 'IN', dataSourceId: DS }, format: format('#e15759') }], 'the bars pane is not colored by Measure Names, so Sales gets no measure rule');
 	assert.ok(issues.some((i) => i.code === 'card.colors-dropped'), 'Region is not on the card');
+});
+
+test('heatmapOverrides colors the given columns with one range, keeping a diverging center and its steps', () => {
+	assert.deepEqual(heatmapOverrides({ type: 'interpolated', palette: 'blue_10_0' }, [7]), { use_heatmap_colors: 'true', heatmap_columns: '7', range_by_column: 'false' });
+	assert.equal(heatmapOverrides(undefined, [3, 4, 5, 6, 7, 8, 9]).heatmap_columns, '3-9', 'spread members as a range');
+	assert.equal(heatmapOverrides(undefined, [5, 2, 3, 9]).heatmap_columns, '2-3,5,9');
+	const base = ['use_heatmap_colors', 'heatmap_columns', 'range_by_column'];
+	const diverging = (encoding) => Object.fromEntries(Object.entries(heatmapOverrides(encoding, [2])).filter(([key]) => !base.includes(key)));
+	assert.deepEqual(diverging({ type: 'custom-interpolated', paletteType: 'ordered-diverging', center: -1, steps: 2 }), { show_diverging: 'true', midpoint_value_type: 'Manual', midpoint_value: '-1', diverging_range_count: '1' });
+	assert.deepEqual(diverging({ type: 'custom-interpolated', center: 0, steps: 7 }), { show_diverging: 'true', midpoint_value_type: 'Zero', diverging_range_count: '3', show_midpoint: 'true' });
+	assert.deepEqual(diverging({ type: 'interpolated', palette: 'red_green_diverging_10_0' }), { show_diverging: 'true', midpoint_value_type: 'Zero', diverging_range_count: '5' }, 'a continuous diverging scale');
+	assert.deepEqual(diverging({ type: 'custom-interpolated', paletteType: 'ordered-diverging', steps: 20 }), { show_diverging: 'true', midpoint_value_type: 'Zero', diverging_range_count: '5' }, 'at most 5 ranges a side');
+	assert.deepEqual(diverging({ type: 'custom-interpolated', paletteType: 'ordered-sequential' }), {});
 });

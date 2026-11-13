@@ -34,8 +34,15 @@ function parseEncoding(enc) {
 	if (members.length > MAX_COLOR_MEMBERS) out.truncated = members.length;
 	if (members.length) out.members = members.slice(0, MAX_COLOR_MEMBERS);
 	if (multi) out.multi = true;
-	const colors = (enc.child('color-palette')?.all('color') ?? []).map((c) => colorValue(c.textContent())).filter(Boolean);
+	const palette = enc.child('color-palette');
+	const colors = (palette?.all('color') ?? []).map((c) => colorValue(c.textContent())).filter(Boolean);
 	if (colors.length) out.colors = colors;
+	if (palette?.attr('type')) out.paletteType = palette.attr('type');
+	const center = Number(enc.attr('center'));
+	if (enc.attr('center') && Number.isFinite(center)) out.center = center;
+	const steps = Number(enc.attr('num-steps'));
+	if (Number.isInteger(steps) && steps > 0) out.steps = steps;
+	if (enc.attr('include-totals') === 'true') out.includeTotals = true;
 	return out;
 }
 

@@ -118,7 +118,8 @@ test('an ir.json from before IR version 2 warns that the app gets none of the Ap
 	assert.match(issue.suggestion, /extract again/);
 	assert.ok(warned.some((m) => /older t2d/.test(m)));
 	assert.equal(convertWorkbook(superstore(), { manifests: [manifest], options: { target: 'pages' } }).issues.find((i) => i.code === 'convert.ir-outdated').severity, 'info');
-	const fresh = (ir) => !convertWorkbook(ir, { manifests: [manifest], options: { target: 'app' } }).issues.some((i) => i.code === 'convert.ir-outdated');
+	// The axis title issue ends the chain: it is the only one left once an older ir.json loses nothing else.
+	const fresh = (ir) => !convertWorkbook(ir, { manifests: [manifest], options: { target: 'app' } }).issues.some((i) => i.code === 'convert.ir-outdated' && !/did not read axis titles/.test(i.message));
 	assert.ok(fresh({ ...superstore(), irVersion: IR_VERSION }));
 	const colorless = convertWorkbook({ ...superstore(), actions: [] }, { manifests: [manifest], options: { target: 'pages' } }).issues.find((i) => i.code === 'convert.ir-outdated');
 	assert.equal(colorless.severity, 'info', 'a version 1 ir.json with the newer fields came from the newer parser');
@@ -191,6 +192,9 @@ test('an ir.json from before IR version 2 warns that the app gets none of the Ap
 	const shownFilter = { pillId: `[${ds.id}].[none:Region:nk]`, datasourceId: ds.id, fieldId: '[Region]', kind: 'categorical', all: true, shownOnDashboard: true };
 	const withShown = { ...superstore(), irVersion: 14, worksheets: superstore().worksheets.map((w, i) => (i ? w : { ...w, filters: [...(w.filters ?? []), shownFilter] })) };
 	assert.match(convertWorkbook(withShown, { manifests: [manifest], options: { target: 'app' } }).issues.find((i) => i.code === 'convert.ir-outdated').message, /IR version 14.*filter cards of each worksheet's own window/);
+	const axisTitles = convertWorkbook({ ...superstore(), irVersion: 18 }, { manifests: [manifest], options: { target: 'app' } }).issues.find((i) => i.code === 'convert.ir-outdated');
+	assert.equal(axisTitles.severity, 'info');
+	assert.match(axisTitles.message, /IR version 18.*did not read axis titles, hidden axes and field labels, or turned-off tooltips/);
 });
 
 test('target app: Domo navigation is on unless domoNav is false (never with LEFT); every view gets a navigation icon', { skip }, async () => {

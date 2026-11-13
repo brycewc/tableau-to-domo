@@ -149,6 +149,13 @@ grow; positional parameters may not change without updating every caller.
   Q1 and 2025-11-30 FY2025 Q4). Fiscal starts apply to date part and truncation pills and relative date filters only; DATEPART
   and DATETRUNC in a calc are calendar ones, which is why some workbooks write `DATEPART('quarter', DATEADD('month', 1, [d]))`
   by hand. A v16 IR with any date field gets the info `convert.ir-outdated` and converts as before (every year from January).
+- Axis titles, hidden axes and field labels, tooltip mode (IR 19, `twb/worksheets.js`): `WorksheetIR.axisTitles` lists the
+  `<style-rule element='axis'><format attr='title' field scope class value>` entries as `{ pillId, scope, axis, title }`
+  (`axis` is the class, 1 for a dual axis's second; `title: ''` blanks the title; a Measure Values axis names
+  `[Multiple Values]`). `hiddenAxes` lists the same rule's `attr='display' value='false'` entries, `hiddenFieldLabels` the
+  shelves (`rows`, `cols`) of `<style-rule element='worksheet'><format attr='display-field-labels' value='false'>`, and
+  `tooltipMode` keeps `<tooltip-style tooltip-mode>` when it is `none` (Tooltip off) or `sticky`. A v18 IR with any shelf pill
+  gets the info `convert.ir-outdated`: axis titles fall back to Tableau's default names and a turned-off tooltip is not seen.
 - Dashboards carry `tabIndex` (position in `<windows>`, the tab order) and `hidden` (a hidden tab); `WorkbookIR.filterActions`
   lists `tsc:tsl-filter` actions as `{ name, sourceDashboard, target }` (convert turns on interaction carry-over in an app when one
   targets another dashboard).
@@ -602,10 +609,19 @@ after each card.
     keeps one card (`chart.small-multiples` / `push.card-split` warning); one member keeps the card and its title.
     Phoenix's trellis facets along the category axis only, so it cannot draw Tableau's stacked row panes; member cards
     scale their value axes separately (info). A color dimension takes the SERIES from a nested second category level
-    whose headers are hidden or that keeps one member; that level stays in groupBy and the sorts (`sortOnly`). When two
-    or more visible levels remain, a bar chart combines them into one ITEM (`combinedCategory`, `SlotMapping.derived`
-    `{ type: 'concat', pillIds }`, `chart.combined-category`): Tableau stacks a color that is on no level within each cell of
-    the level tuple, so that color is the SERIES and the chart a stacked bar; three or more levels without such a color keep the colored, else innermost, level as a multibar SERIES,
+    whose headers are hidden or that keeps one member; that level stays in groupBy and the sorts (`sortOnly`).
+    Two or more visible levels on a bar chart with no date level, no pane series and no color on a level draw as Phoenix
+    trellis categories, Tableau's header bands (`trellisLevels`, `chart.trellis` info, override `show_as_trellis: 'Trellis
+    Categories'`): the innermost level is the ITEM, the next GROUP1 and the next GROUP2 (from four levels, GROUP2 is the
+    concat of the outer ones, below); a color on no level is the stacked SERIES (with no color, `badge_*_bar`). Phoenix's
+    macros `%_CATEGORY2_NAME` and `%_CATEGORY3_NAME` name GROUP1 and GROUP2 in hover and label text (`DataLabelBase.java`
+    `getFormattedText`). A click passes the group value (`Graph.java`), so GROUP1/GROUP2 drill like ITEM and SERIES, and
+    verify treats them as dimensions. A level that has no column on the card leaves the next level the ITEM
+    (`promoteTrellisGroups`). Lines, combos, a color on a level and date levels keep the paths below; a filter or
+    highlight action on the levels GROUP2 would combine also does. When the trellis does not apply and two or more
+    visible levels remain, a bar chart combines them into one ITEM (`combinedCategory`, `SlotMapping.derived`
+    `{ type: 'concat', pillIds }`, `chart.combined-category`): three or more levels with a color on one keep the colored
+    level as a multibar SERIES,
     and a pane series from the value shelf keeps the SERIES beside the combined levels. One-member levels sort only (with
     two visible levels left they nest as before, without the drop); a date level, or a filter or highlight action from
     the sheet on a level (the click could not pass the level's own value), keeps the nesting (`chart.combined-category`
@@ -625,10 +641,29 @@ after each card.
     color, the shared untagged pane none either) keeps the colored pane: a line colored, a `badge_two_trendline` by the
     color; a bar colored, the bar the `bar` family picks (stacked). Domo line+bar draws every series member but the last as
     bars, on a second axis, so the total is dropped (`chart.dual-axis` warning). Both panes colored stays `badge_line_bar`.
-  - EXTRAINFO1..3 hold measures the card does not already show (compared by field, aggregation and table calc,
-    `measureKey`; a 100% chart's VALUE is the measure without its percent). With a Tableau `<customized-tooltip>`
-    (`PaneIR.tooltip`) only the measures it names count, because Phoenix shows an EXTRAINFO column only through a
-    `%_TOOLTIPn` hover macro.
+  - Square marks with dimensions on Rows and Columns and no axis measure: a heat map (`badge_heatmap`, the innermost
+    header of each axis, other headers dropped with `chart.extra-dimension`) unless the sheet is a highlight table
+    (`highlightTable`): a measure on Text or Label with more than one header on an axis or more label measures than
+    EXTRAINFO slots, or a pale color scale (`paleScale`: listed gradient colors all of WCAG relative luminance >= 0.6 with a
+    contrast ratio under 1.5 between any two; a named palette is never pale). A highlight table goes through the text
+    table path, which keeps every header (so a table calc addressing one converts). Its color (`tableColor`): a pale scale
+    is left off (`chart.highlight-table` info); a Mega Table crosstab whose value column is the color measure with a gradient
+    (an explicit one, or none on a continuous measure) gets `ChartInference.heatmap` (info); a pivot drops it
+    (`chart.highlight-table` warning: Domo pivots have no color scale, apiContent prunes the Mega Table heatmap options from
+    a pivot); a flat table keeps the old "needs a conditional format" warning. A pivot-shaped highlight table with one
+    visible column header that has a manual member list (at most 50, not a date), one value measure equal to the color
+    measure (no table calc) and a visible gradient is spread into a Mega Table (`spreadsHighlight`, `crosstabTable` with
+    `highlight`), so its color can be heatmap columns, at the cost of pivot column subtotals. Color-only sheets with several
+    headers stay heat maps.
+  - EXTRAINFO1..3 hold fields the mark label or tooltip names that the card does not already show (measures compared by
+    field, aggregation and table calc, `measureKey`; a 100% chart's VALUE is the measure without its percent), in this
+    order: label measures (label token order), tooltip measures (tooltip line order), then tooltip dimensions the card
+    groups by but has no macro for (detail, `sortOnly`, the parts of a combined category; role `dim`, no aggregation) and
+    ATTR dimensions (role `measure`, so MAX). The tooltip is the `<customized-tooltip>` (`PaneIR.tooltip`), else Tableau's
+    default (`defaultTooltipText`, below); with the tooltip off (`tooltipMode: 'none'`) only label fields count. Phoenix
+    shows an EXTRAINFO column only through a `%_TOOLTIPn` macro, which `slotMacro` gives dimensions too. Fields past three
+    get one `chart.tooltip` naming each with its source, a warning when a label field is dropped, else info; tooltip shelf
+    dimensions the card does not group by keep the "not carried over" info.
 - `colors.js` `cardColorRules(ws, { family, slots, dataSourceId })` (both targets): Tableau colors as card color rules in
   `definition.conditionalFormats.card`, the Analyzer's shape `{ condition: { column, values, operand: 'IN', dataSourceId }, format:
   { color, textColor: null, textStyle: 'PLAIN', applyToRow: false } }` (Phoenix matches the raw series or category value; empty
@@ -642,16 +677,39 @@ after each card.
   color pills on dashboard sheets, from `<preferences>`, `TABLEAU_PALETTES` (Tableau 10 for the default) or the colors its member maps
   use (`layout.theme-palette`); `paletteJson(colors)`: the theme palette string (a 9-shade color range per color with the color
   at column 4, one rule cycling `[row, 4]` to 36 cells, `lineColors` and `latLongMapColors` alike, a 9-cell gradient per row; one
-  shade per row made Phoenix fail every chart in the app, verified live).
+  shade per row made Phoenix fail every chart in the app, verified live). The IR keeps a gradient's `center`, `steps`
+  (`num-steps`), `paletteType` (the `color-palette` type) and `includeTotals` (IR 19). `heatmapOverrides(encoding,
+  columnNumbers)`: Mega Table heatmap chart overrides (TableCSR) `use_heatmap_colors`, `heatmap_columns` (1-based subscription
+  column numbers, runs as `3-9`), `range_by_column: 'false'` (one scale, as Tableau's); a diverging scale (palette type,
+  a `diverging` palette name or a center) adds `show_diverging`, `midpoint_value_type` Zero (center 0 or none) or Manual with
+  `midpoint_value`, `diverging_range_count` (half the steps, 1 to 5; 5 when continuous) and `show_midpoint` for an odd
+  step count. Colors stay Domo's theme gradients (shade ramps of the app palette); Tableau's hex stops cannot be set, and
+  Domo never colors total or subtotal rows.
 - `chart-options.js`: chart property overrides, written only for chart types whose Phoenix option list
   has the property, since Domo drops the others.
   - `markTextOverrides`: `hover_text` from the custom tooltip with field tokens as macros (`slotMacro`: ITEM
-    `%_CATEGORY_NAME`, SERIES `%_SERIES_NAME`, VALUE `%_VALUE`, a percent of total along the series
-    `%_PERCENT_OF_CATEGORY`, over every mark `%_PERCENT_OF_TOTAL`, EXTRAINFOn `%_TOOLTIPn`; parameters show their current
+    `%_CATEGORY_NAME`, GROUP1 `%_CATEGORY2_NAME`, GROUP2 `%_CATEGORY3_NAME`, SERIES `%_SERIES_NAME`, VALUE `%_VALUE`, a
+    percent of total along the series `%_PERCENT_OF_CATEGORY`, over every mark `%_PERCENT_OF_TOTAL`, EXTRAINFOn
+    `%_TOOLTIPn`; parameters show their current
     value, `<Sheet Name>` the sheet name). Tokens with no macro (dimensions off the card, viz in tooltip, `<Page Name>`)
-    drop their line (`chart.mark-text`, info); a translation that keeps no value macro is not written. Without a
-    custom tooltip but with EXTRAINFO columns: Phoenix's default hover for the chart type plus `<name>: %_TOOLTIPn`
-    lines. `datalabel_text` when a pane shows mark labels (`mark-labels-show`): the customized label, else the Text and
+    drop their line (`chart.mark-text`, info); a translation that keeps no value macro is not written. A measure whose
+    quick table calc the card could not convert (`CardBuilder.unconvertedCalcs`, from `measureRef`'s `calcUnconverted`;
+    a 100% chart's own percent of total does not count) gets no EXTRAINFO column, and every line naming it is dropped
+    whatever else is on it (`slotMacro` `{ unconverted: true }`), so the base number never shows under the calc's name.
+    Such a token does not count as a lost value; when the VALUE itself is unconverted the label gets no `%_VALUE`
+    appended and the hover is written without one. Without a
+    custom tooltip the hover is Tableau's default tooltip, always written when it keeps a value macro
+    (`defaultTooltipText`, in `chart-types.js` with `pillLabel`, `labelPills` and `tableauLabel`): a `<label>: <[pill]>`
+    line per field on Columns, Rows and the marks card, dimensions first, then measures and ATTR pills, each group in
+    column instance order, which Tableau sorts by instance name (`[none:Region:nk]`, plain code unit order). That order
+    matches the live hover of Provisioned Order Items (its inner level `[none:Calculation_...]` before the outer
+    `[none:Provision FYP (copy)...]`) and 34 custom tooltip panes in the corpus that keep Tableau's seeded lines; the 5
+    sheets that miss are edited (stale fields, reordered copies). Shelf order fits 11 panes. Labels are the field name, the aggregation
+    unless a sum, or `<Part> of <name>` for a date part or truncation; Measure Names with Measure Values is one
+    `<[:Measure Names]>: <[Multiple Values]>` line. Its dropped fields are not reported (the EXTRAINFO overflow and the
+    chart warnings already say so). When the default loses the value, Phoenix's default hover for the chart type plus
+    `<name>: %_TOOLTIPn` lines. With the tooltip off (`tooltipMode: 'none'`) no `hover_text`, info `chart.tooltip-off`:
+    Domo always shows a hover. `datalabel_text` when a pane shows mark labels (`mark-labels-show`): the customized label, else the Text and
     Label shelf fields, else the measure the pane plots (its dual-axis `yAxisPill`/`xAxisPill`, else the one measure on
     Rows and Columns, so a percent-of-total axis labels `%_PERCENT_OF_*`), else `%_VALUE`. A non-empty `datalabel_text`
     turns Phoenix's labels on.
@@ -667,6 +725,18 @@ after each card.
     charts, combos or scatters), info `chart.axis-range`. Nothing else
     pins the range: the sign of the data is unknown at convert time.
     Number formats in `hover_format` are not mapped; the column format (below) applies to labels and hover values.
+  - Axis titles (`axisTitleOverrides`, bars and combos, lines, areas, scatters): Phoenix draws no scale title unless set, and
+    `title_x` is always the category scale, `title_y` the primary value scale, whatever the orientation
+    (`HandlerScaleBase.java`). `title_y` is the value axis's custom Tableau title (`WorksheetIR.axisTitles`, class 0, on the
+    value shelf, matched by `measureKey`, or `[Multiple Values]`), else Tableau's default name (`pillLabel`, which wraps
+    a quick table calculation's name around the field, as in "% of Total Count of Customer"; "Value" for Measure Values; several SERIES measures joined " & "); a blank title, a hidden axis (`hiddenAxes`) or a measure off the
+    value shelf gives none. `title_x` joins the field labels of the ITEM and GROUP levels on the category shelf (Columns on
+    a vertical chart, Rows on a horizontal one, the other when the levels sit there), in shelf order, with " / "; a
+    continuous level uses its axis title instead. Hidden field labels on that shelf (`hiddenFieldLabels`) or a hidden header
+    leave a discrete level out. Combos get `title_x` only (their value scales use `title_line` / `title_bar`, not mapped);
+    a scatter's `title_x` is the Columns measure and `title_y` the Rows measure. No `title_pos_*`: Tableau draws column
+    field labels above the view and Domo's category title sits under the axis with no top position, so a vertical chart
+    with a discrete level in `title_x` gets the info `chart.axis-title-position`.
   - `legendPlacements(ir)` / `legendOverrides`: a color legend zone (no param, Measure Names, or a Color field) whose
     center is above or in the top quarter of its worksheet zone is `lrg_legend_position` and `details_legend_position`
     Top; in the bottom quarter or below, both Bottom; right of it (or in its right quarter), `details_legend_position`
@@ -947,6 +1017,12 @@ after each card.
   series (`chart.hidden-level`).
 - An ITEM sorted by the VALUE column on a card that groups by more than the ITEM sorts by `MAX(<value> FIXED (BY <item>))`
   (`itemGrainSort`): a sort equal to the VALUE column turns second-level sorting off, so the rows would follow per-row values.
+  FIXED goes after each aggregate call of the value (`fixedAt` in `warehouse-sorts.js`): Domo's grammar takes FIXED only
+  after a function call (dataShared `BeastMode.g4` `function_expression fixed_expression`, also `JSqlParserCC.jjt`
+  `FixedExpression`), so `MAX((SUM(a) - SUM(b)) FIXED (BY x))` is a PARSING_ERROR and the card fails to render. A CASE or
+  arithmetic over aggregates becomes `MAX(SUM(a) FIXED (BY x) - SUM(b) FIXED (BY x))` (ice `FixedParser` collects every
+  FIXED inside the outer aggregate). A value that nests aggregates, has a window or FIXED already, or names a column or
+  beast mode outside an aggregate gets no grain key.
 - Text functions (`CONTAINS`, `STARTSWITH`, `ENDSWITH`, `FIND`) and `=` / `!=` lower-case both sides when an operand is a field
   whose collation ignores case (`collationIgnoresCase`: ICU strength 1 or 2; resolved columns carry `ignoreCase`, kept through
   calc references and IF/CASE results), since Domo compares text case-sensitively.
@@ -977,7 +1053,8 @@ after each card.
   not linked yet (Phoenix converts links only in pivot headers; no render probe).
 - Category axis order (`itemFirst`): a bar, line, area or combo card whose ITEM is not a date sorts by it first, with its own
   Tableau sort when it has one, else ascending: a text ITEM by an aggregated card formula `<field> (natural order)` that pads
-  every digit run to 10 digits (`naturalOrderKey`, so "2023 P7" comes before "2023 P10", as Tableau draws it), a number by its
+  every digit run to 10 digits (`naturalOrderKey`, so "2023 P7" comes before "2023 P10", as Tableau draws it; on warehouse
+  data `warehouseBackreferences` rewrites its backreferences, see the warehouse sorts below), a number by its
   value; a date ITEM is left to Domo, which orders dates. Top N rankings stay ahead of it, and
   the axis sort comes before every other sort. On a card with one SERIES, ITEM and VALUE and two or more sorts, Domo's
   second-level sorting (only the first two sorts count) gives a sort on the ITEM or SERIES column itself that slot wherever it is
@@ -1007,6 +1084,32 @@ after each card.
   series first appears in the rows; it listed the series in Tableau's order but stacked them upside down, and it is gone.
   Verified on throwaway copies: `[axis key, <series> ascending]` renders the periods in order and the series alphabetically,
   where Tableau draws its manual order.
+  A trellis card (GROUP1, GROUP2 columns) sorts `[GROUP2 key, GROUP1 key, axis key, ...]` (`trellisOrder`): Phoenix draws a
+  band per run of rows, so the rows must come group first. Each group key is its Tableau sort (a VALUE sort at the group's
+  grain through `itemGrainSort`; when that cannot be built, as for an aggregated beast mode VALUE, the group's
+  `(total order)` window key, since a sort equal to the VALUE column would order rows by their own values and split the
+  band; without one, `card.sort` info and the name order), else the natural-order key of a combined GROUP2 or of a text
+  group, else the column ascending. The series-first rules above are skipped: an unsorted series is `[..., axis key, SERIES ascending]` and a
+  stack sorted by value is left to `category_sort_method`. [UNVERIFIED] The trellis order with a stacked SERIES was not
+  checked on a render: whether Phoenix keeps the series order inside each band is not known. Groups whose total-order keys
+  tie are ordered by the next key, so two groups with the same total can interleave (on the sharefile-arr detail cards, 83
+  to 239 of about 19,000 AccountIDs, all on tied totals).
+- Warehouse sorts (`warehouse-sorts.js`, run by convertWorkbook after the cards are planned) for cards on a Cloud Amplifier
+  dataset, a view on one, or an ADR dataflow output (`warehouseDatasetKeys`):
+  - `warehouseSafeSorts`: a warehouse card cannot sort by a window function ("is not a valid order by expression"), so a
+    `(total order)` key `SUM(<measure>) OVER (PARTITION BY <columns>)` becomes `MAX(fixedAt(<measure>, <columns>))`, a
+    FIXED total with FIXED after each aggregate call (see `itemGrainSort`). A key partitioned by an expression, or whose
+    measure `fixedAt` cannot express, is dropped with its orderBy entries (warning `card.warehouse-total-order`).
+  - `warehouseBackreferences`: Domo-stored data reads `$0` / `$n` in a REGEXP_REPLACE replacement, but ice sends the call
+    to Snowflake unchanged (dataShared `SnowflakeFunctionTranslator.convertREGEXP_REPLACE` only reorders a 4-argument
+    form), where `$` is literal text: every natural-order key came out as `$1$0 Q$1$0` and the sort tied. Snowflake takes
+    `\n` and has no whole-match form, so the card formulas and beast modes on warehouse datasets get `\n`, and a
+    replacement with `$0` gets its pattern wrapped in a group and every reference shifted by one. The beast mode text keeps
+    one backslash: Domo's literal grammar has no backslash escape and `SnowflakeExpressionDeParser.visitExpr(StringValue)`
+    doubles every backslash for Snowflake. The natural-order key there is
+    `REGEXP_REPLACE(REGEXP_REPLACE(<e>, '([0-9]+)', '0000000000\1'), '0*([0-9]{10})', '\1')`; the REGEXP_MATCH
+    emulation (`'$0_'`) becomes `'(p)', '\1_'`. Verified on render previews of the POI cards (keys distinct, trellis bands
+    contiguous).
 - Heatmaps (`heatmapOrder`): Phoenix lists the columns and rows in the order they first appear in the query, so an unsorted
   text ITEM or SERIES gets its natural-order key (another unsorted header ascending), listed `[series, item]` for
   second-level sorting (verified on a render preview: `[item key]` alone orders the
@@ -1086,14 +1189,17 @@ after each card.
   subtotaled levels are `chart.crosstab-subtotals`), `total_row_suppress_count` / `subtotal_suppress_count`, and number headers get
   `tableColumn.hideTotal` / `hideSubtotal` so FY is not summed (its "2026" comes from `PLAIN_INTEGER_FORMAT`, below). Unused
   card formulas (the spread header's rank) are dropped. Verified on a throwaway copy: every row paged, the values Tableau shows. The member
-  columns copy the measure column's format.
+  columns copy the measure column's format. A highlight table's color (`ChartInference.heatmap`) becomes heatmap columns
+  (`heatmapColumns`, `colors.js` `heatmapOverrides`) on the color measure's column, or on the spread member columns (not
+  the Grand Total); a highlight table with one listed column header is spread the same way under four row headers.
 - Number formats (`number-format.js`): `domoNumberFormat(tableauFormat)` maps a Tableau number format to a Domo column format
   (`{ type: 'number'|'currency'|'percent', format, commas, percentMultiplied, precision, currency?, abbreviate }`, the shape the
   editor saves and Phoenix reads). It reads the first section only (the `;` zero section and
   `[...]` conditions are dropped; the negative section becomes chart properties, below), the `n`/`c`/`p`/`*` prefix and `!locale!` tag, the currency symbol (quoted or `$`
   before the number; with `n`/`*` only a Unicode currency symbol), decimals, thousands separators, percent (`%`, or a literal `"%"`
   suffix as `percentMultiplied: false`) and scaling commas (`,K` thousands, `,,M` millions) as `abbreviate: true` (Domo picks
-  K/M/B per value). `C<LCID>` (Currency, Standard) is 2 decimals with the locale's symbol. Dates, `e` scientific, `N`/`S` and
+  K/M/B per value) with at least 2 decimals (`c"$"#,##0,K` gives precision 2, as the user's edited Provisioned Order Items
+  card 851775387 has it; `,,.000M` keeps 3). `C<LCID>` (Currency, Standard) is 2 decimals with the locale's symbol. Dates, `e` scientific, `N`/`S` and
   other text formats give none. A card column takes, in order, the worksheet's `text-format` for its pill
   (`WorksheetIR.numberFormats`, cell rule before label rule), then the field's `default-format` (only when the column is the field
   itself: not a count or table calc of a measure, not a bin), then `PLAIN_INTEGER_FORMAT` for an integer dimension. On a 100%
@@ -1505,7 +1611,13 @@ layout endpoints answer 400 `range=-*` without Accept-Language.)
   columns by label, pivots Measure Names/Values, compares row counts, members and measure totals, and gives `ok`,
   `differs` or `not comparable` per card. Sampled datasets skip totals: `sampledRows(plan, datasetKey, manifests, state)` reads
   extract-time sampling (plan, manifests) and push-time `--sample-rows` (`extra.sampled` on the dataset's state entry), on the
-  card's dataset or any dataset a dataflow or view builds it from. Writes `verify.json`. `t2d verify`.
+  card's dataset or any dataset a dataflow or view builds it from. The render asks for up to 250,000 rows so the data
+  check sees every row, which hides the limit Phoenix applies to a page view: `phoenixRowLimit(chartType, columns)`
+  mirrors Phoenix `LimitService.getPhoenixLimitByChartType` (pivot 10,000; HTML table 10,000 cells; boxplot, histogram and
+  maps 100,000; selectors 500,000, the date selector 500; other charts 25,000; a Mega Table pages, so none), and
+  `drawLimit(card, domo)` reports a card whose render holds more rows than that (and whose own limit does not cut it first):
+  `drawLimited: { limit, rows, atLeast? }` on the card, a `DRAW LIMIT:` note, a warning, `summary.drawLimited` (count) and a
+  line per card from `t2d verify`. Writes `verify.json`. `t2d verify`.
 
 `src/index.js` re-exports the public API above.
 

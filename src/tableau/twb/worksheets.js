@@ -145,6 +145,32 @@ function fixedAxes(table, resolvePill) {
 	return axes;
 }
 
+const axisScope = (f) => (f.attr('scope') === 'cols' ? 'cols' : 'rows');
+
+function axisFormats(table, attr) {
+	return (table?.child('style')?.all('style-rule') || []).filter((r) => r.attr('element') === 'axis').flatMap((r) => r.all('format')).filter((f) => f.attr('attr') === attr && f.attr('field'));
+}
+
+function axisTitles(table, resolvePill) {
+	return axisFormats(table, 'title').map((f) => ({ pillId: resolvePill(f.attr('field')).id, scope: axisScope(f), axis: Number(f.attr('class') ?? 0), title: String(f.attr('value') ?? '') }));
+}
+
+function hiddenAxes(table, resolvePill) {
+	return axisFormats(table, 'display')
+		.filter((f) => f.attr('value') === 'false')
+		.map((f) => ({ pillId: resolvePill(f.attr('field')).id, scope: axisScope(f), axis: Number(f.attr('class') ?? 0) }));
+}
+
+function hiddenFieldLabels(table) {
+	const scopes = (table?.child('style')?.all('style-rule') || [])
+		.filter((r) => r.attr('element') === 'worksheet')
+		.flatMap((r) => r.all('format'))
+		.filter((f) => f.attr('attr') === 'display-field-labels' && f.attr('value') === 'false')
+		.map((f) => f.attr('scope'))
+		.filter((s) => s === 'rows' || s === 'cols');
+	return [...new Set(scopes)];
+}
+
 /**
  * Parse one <worksheet>.
  * @param {XmlNode} node
@@ -350,6 +376,14 @@ export function parseWorksheet(node, ctx) {
 	if (Object.keys(numberFormats).length) ws.numberFormats = numberFormats;
 	const axes = fixedAxes(table, resolvePill);
 	if (axes.length) ws.axes = axes;
+	const titles = axisTitles(table, resolvePill);
+	if (titles.length) ws.axisTitles = titles;
+	const axesHidden = hiddenAxes(table, resolvePill);
+	if (axesHidden.length) ws.hiddenAxes = axesHidden;
+	const labelScopes = hiddenFieldLabels(table);
+	if (labelScopes.length) ws.hiddenFieldLabels = labelScopes;
+	const tooltipMode = table?.child('tooltip-style')?.attr('tooltip-mode');
+	if (tooltipMode === 'none' || tooltipMode === 'sticky') ws.tooltipMode = tooltipMode;
 	const filterTitles = {};
 	for (const rule of (table?.child('style')?.all('style-rule') || []).filter((r) => r.attr('element') === 'quick-filter')) {
 		for (const f of rule.all('format')) {

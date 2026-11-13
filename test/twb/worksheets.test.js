@@ -77,6 +77,34 @@ test('an axis with a fixed range keeps its min and max; automatic and independen
 	], 'Fixed start keeps only the min, Fixed end only the max');
 });
 
+test('axis titles keep a blank title and the axis class; hidden axes and hidden field labels list their shelves', () => {
+	const axis = [
+		`<format attr='title' class='0' field='[${DS}].[sum:Sales:qk]' scope='rows' value='Order Items' />`,
+		`<format attr='title' class='1' field='[${DS}].[sum:Profit:qk]' scope='rows' value='' />`,
+		`<format attr='title' class='0' field='[Multiple Values]' scope='cols' value='Amount' />`,
+		`<format attr='display' class='0' field='[${DS}].[sum:Profit:qk]' scope='cols' value='false' />`,
+		`<format attr='display' class='0' field='[${DS}].[sum:Sales:qk]' scope='rows' value='true' />`
+	].join('');
+	const style = `<style><style-rule element='axis'>${axis}</style-rule><style-rule element='worksheet'><format attr='display-field-labels' scope='cols' value='false' /><format attr='display-field-labels' scope='rows' value='true' /></style-rule></style>`;
+	const ws = buildWorkbookIR(workbook({ table: style, rows: `[${DS}].[sum:Sales:qk]`, cols: `[${DS}].[none:Region:nk]` })).worksheets[0];
+	assert.deepEqual(ws.axisTitles, [
+		{ pillId: `[${DS}].[sum:Sales:qk]`, scope: 'rows', axis: 0, title: 'Order Items' },
+		{ pillId: `[${DS}].[sum:Profit:qk]`, scope: 'rows', axis: 1, title: '' },
+		{ pillId: '[Multiple Values]', scope: 'cols', axis: 0, title: 'Amount' }
+	]);
+	assert.deepEqual(ws.hiddenAxes, [{ pillId: `[${DS}].[sum:Profit:qk]`, scope: 'cols', axis: 0 }]);
+	assert.deepEqual(ws.hiddenFieldLabels, ['cols']);
+	const plain = buildWorkbookIR(workbook({ rows: `[${DS}].[sum:Sales:qk]` })).worksheets[0];
+	assert.deepEqual([plain.axisTitles, plain.hiddenAxes, plain.hiddenFieldLabels, plain.tooltipMode], [undefined, undefined, undefined, undefined]);
+});
+
+test("tooltip-style tooltip-mode 'none' and 'sticky' are kept; other modes are not", () => {
+	const mode = (value) => buildWorkbookIR(workbook({ table: `<tooltip-style tooltip-mode='${value}' />`, rows: `[${DS}].[sum:Sales:qk]` })).worksheets[0].tooltipMode;
+	assert.equal(mode('none'), 'none');
+	assert.equal(mode('sticky'), 'sticky');
+	assert.equal(mode('responsive'), undefined);
+});
+
 test('grand totals (rows/cols total=true) and subtotaled pills are read from the table', () => {
 	const xml = workbook({ rows: `[${DS}].[none:Region:nk]`, cols: `[${DS}].[none:Segment:nk]` })
 		.replace('<rows>', "<rows total='true'>")

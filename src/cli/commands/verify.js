@@ -59,6 +59,10 @@ export async function run({ config, args, reporter }) {
 	reporter.print(rows.length ? formatTable(['Card', 'Status', 'Tableau view', 'Card id', 'Detail'], rows) : 'No cards in the plan.');
 	const n = summary.counts;
 	reporter.print(`\n${slug} on ${summary.instance}: ${n.ok} ok, ${n.differs} differ, ${n['not-comparable']} not comparable (tolerance ${tolerance * 100}%)`);
+	for (const c of summary.cards.filter((x) => x.drawLimited)) {
+		const d = c.drawLimited;
+		reporter.print(`Draw limit: "${c.title}" (${c.cardId}) is drawn from ${fmt(d.limit)} of ${fmt(d.rows)}${d.atLeast ? '+' : ''} rows, so it shows part of the data.`);
+	}
 	for (const s of summary.searchStubs ?? []) {
 		reporter.print(`Search: app view "${s.title}" (${s.viewId}) has a title-less page entry; it shows as "${s.viewId}" in Apps & Dashboards and search.`);
 	}

@@ -344,7 +344,7 @@ test('superstore regression: combo card is multi-series (line measure, then bar 
 	const combo = plan.cards.find((c) => c.title === 'Sales and Profit Ratio');
 	assert.equal(combo.chartType, 'badge_line_bar');
 	const columns = combo.body.definition.subscriptions.main.columns;
-	assert.deepEqual(columns.map((c) => c.mapping), ['ITEM', 'SERIES', 'SERIES', 'EXTRAINFO1'], 'the Running Sales tooltip is a window function beast mode');
+	assert.deepEqual(columns.map((c) => c.mapping), ['ITEM', 'SERIES', 'SERIES', 'EXTRAINFO1', 'EXTRAINFO2'], 'the default tooltip shows the percent label measure, then the Running Sales window function beast mode');
 	const lifetime = plan.beastModes.find((b) => b.name === 'Customer Lifetime Sales');
 	assert.match(lifetime.expression, /FILTER ALLOW `Country\/Region`, `Region`/);
 });

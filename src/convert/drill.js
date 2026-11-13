@@ -12,7 +12,7 @@ import { findField, pillFor } from './chart-types.js';
 
 const CHART_FAMILIES = new Set(['bar', 'line', 'area', 'combo', 'pie', 'treemap']);
 const TABLE_FAMILIES = new Set(['table', 'crosstab', 'pivot']);
-const CHART_MAPPINGS = ['ITEM', 'SERIES'];
+const CHART_MAPPINGS = ['ITEM', 'SERIES', 'GROUP1', 'GROUP2'];
 const TRUNC_PREFIXES = { year: 'tyr', quarter: 'tqr', month: 'tmn', day: 'tdy' };
 const PART_PREFIXES = { quarter: 'qr', month: 'mn', day: 'dy' };
 const DATE_LEVELS = ['year', 'quarter', 'month', 'day'];
@@ -38,7 +38,7 @@ function hierarchiesFor(ir, datasourceId) {
 const isDimension = (pill) => !pill.aggregated && !pill.tableCalc && String(pill.derivation ?? 'None').toLowerCase() === 'none';
 
 /**
- * Slots a click drills from, in priority order: a chart's axis then series, a map's region, any table column, a pivot's
+ * Slots a click drills from, in priority order: a chart's axis, series, then trellis groups, a map's region, any table column, a pivot's
  * column headers. A pivot cell or row header click filters by the column header only (Phoenix TCell.getColumnDrillFilter;
  * a row header gives "<column> in <column>", VERIFIED LIVE), so a pivot does not drill from its rows.
  */
