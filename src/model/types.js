@@ -414,8 +414,8 @@ export const PLAN_VERSION = 1;
  * @property {number|string} [max]
  * @property {'in-range'|'in-range-or-null'|'non-null'|'null'|'all'} [includedValues]
  * @property {{ periodType: string, first: number, last: number, anchor?: string, includeNull?: boolean }} [relative]
- * @property {{ count: number|string, direction: 'top'|'bottom', by: string, rankColumn?: string }} [top]   by = Tableau expression;
- *   rankColumn: the Magic ETL rank column convert adds (not stored in ir.json)
+ * @property {{ count: number|string, direction: 'top'|'bottom', by: string, members?: any[], rankColumn?: string }} [top]   by = Tableau expression;
+ *   members: the hand-picked list (General tab) Tableau ranks within; rankColumn: the Magic ETL rank column convert adds (not stored in ir.json)
  * @property {string} [expression]              condition / wildcard expression
  * @property {{ pattern: string, mode: 'contains'|'starts-with'|'ends-with'|'exact' }} [wildcard]
  * @property {boolean} [context]

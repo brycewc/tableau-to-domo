@@ -175,6 +175,30 @@ function dateAddBounds(ds, n) {
 	return { term: { date, unit, anchor }, lo: 0, hi: op === 'gt' && unit === 'day' ? -amount - 1 : -amount, approximate: unit !== 'day' };
 }
 
+const YEAR_QUARTER = /^\D*(\d{2}|\d{4})\D+?([1-4])\D*$/;
+const ISO_DATE = /^(\d{4})-(\d{2})/;
+
+function periodIndex(value, unit, label) {
+	if (label) {
+		const m = YEAR_QUARTER.exec(String(value ?? ''));
+		if (!m) return undefined;
+		const year = m[1].length === 2 ? 2000 + Number(m[1]) : Number(m[1]);
+		return year * 4 + Number(m[2]) - 1;
+	}
+	const m = ISO_DATE.exec(String(value ?? ''));
+	if (!m) return undefined;
+	const [year, month] = [Number(m[1]), Number(m[2])];
+	return { year, quarter: year * 4 + Math.floor((month - 1) / 3), month: year * 12 + month - 1 }[unit];
+}
+
+/** A Top N's hand-picked members when they are consecutive periods: their count and first and last member. */
+function listedRun(members, unit, label) {
+	if (!members?.length) return undefined;
+	const ranked = members.map((v) => ({ v, at: periodIndex(v, unit, label) })).sort((a, b) => a.at - b.at);
+	if (ranked.some((r, i) => r.at === undefined || (i && r.at !== ranked[i - 1].at + 1))) return undefined;
+	return { length: ranked.length, first: ranked[0].v, last: ranked.at(-1).v };
+}
+
 const isTrue = (v) => v === true || v === 'true' || v === 'True';
 const isFalse = (v) => v === false || v === 'false' || v === 'False';
 
@@ -229,10 +253,17 @@ export function periodTopFilters(ir) {
 		const label = dateFieldFor(ds, field);
 		const unit = label ? 'quarter' : isDateColumn(field) ? pillPeriod(filter.pillId) : undefined;
 		if (!unit) return undefined;
-		const count = filter.top.count;
-		const how = /^COUNT$/i.test(self[1]) ? `ranks ${unit}s by their row count, which only a hand-picked list of the latest ${unit}s on the filter turns into a date window` : `orders the ${unit}s by date`;
+		const listed = listedRun(filter.top.members, unit, Boolean(label));
+		const count = listed ? Math.min(filter.top.count, listed.length) : filter.top.count;
+		const byCount = /^COUNT$/i.test(self[1]) && !(listed && listed.length <= filter.top.count);
+		const how = byCount ? `ranks ${unit}s by their row count, which only a hand-picked list of the latest ${unit}s on the filter turns into a date window` : `orders the ${unit}s by date`;
 		const target = label ? ` on '${label.name}' (the first day of each quarter, computed in Magic ETL)` : '';
-		note(ws, /^COUNT$/i.test(self[1]) ? 'warning' : 'info', 'filter.period-top', `Top ${count} on ${field.name} by ${self[1].toUpperCase()} ${how}; it is a relative date filter${target}. ${latestNote(unit, count)}`);
+		const list = !filter.top.members?.length
+			? ''
+			: listed
+				? ` Tableau ranks within a hand-picked list of ${listed.length} ${unit}s (${listed.first} to ${listed.last}) that only changes when someone edits it; Domo keeps the latest ${count} instead, so each new ${unit} shows up as the data has it and the oldest drops off.`
+				: ` Tableau ranks within a hand-picked list of ${unit}s that are not consecutive; the Domo window does not follow it.`;
+		note(ws, byCount || filter.top.members?.length ? 'warning' : 'info', 'filter.period-top', `Top ${filter.top.count} on ${field.name} by ${self[1].toUpperCase()} ${how}; it is a relative date filter${target}.${list} ${latestNote(unit, count)}`);
 		const date = label ?? field;
 		const pillId = label ? `[${ds.id}].[none:${stripBrackets(label.id)}:ok]` : filter.pillId;
 		return { pillId, fieldId: date.id, relative: { periodType: unit, first: -count, last: -1 } };
@@ -249,21 +280,30 @@ export function periodTopFilters(ir) {
 		note(ws, term.anchor === 'data' || approximate ? 'warning' : 'info', 'filter.date-window', `'${field.name}' only keeps a window of ${term.unit}s of ${term.date.name}; it is a relative date filter on ${term.date.name} and the calc is not built.${text}${rounding}`);
 		return { pillId: `[${ds.id}].[none:${stripBrackets(term.date.id)}:nk]`, fieldId: term.date.id, relative: { periodType: term.unit, first: 0 - hi - shift, last: 0 - lo - shift } };
 	};
+	let touched = false;
 	const worksheets = (ir.worksheets ?? []).map((ws) => {
 		let changed = false;
-		const filters = (ws.filters ?? []).map((filter) => {
+		const filters = (ws.filters ?? []).flatMap((filter) => {
 			const ds = (ir.datasources ?? []).find((d) => d.id === (filter.datasourceId || ws.datasourceIds?.[0]));
-			if (!ds?.fields) return filter;
-			const window = topWindow(ws, filter, ds) ?? booleanWindow(ws, filter, ds);
-			if (!window) return filter;
-			changed = true;
+			const window = ds?.fields && (topWindow(ws, filter, ds) ?? booleanWindow(ws, filter, ds));
 			const rest = { ...filter };
 			for (const key of ['top', 'include', 'exclude', 'all']) delete rest[key];
-			return { ...rest, ...window, kind: 'relative-date' };
+			if (window) {
+				changed = true;
+				return [{ ...rest, ...window, kind: 'relative-date' }];
+			}
+			const members = filter.kind === 'top' ? filter.top?.members : undefined;
+			if (!members?.length) return [filter];
+			changed = true;
+			const top = { ...filter.top };
+			delete top.members;
+			const listed = { ...rest, kind: 'categorical', include: members };
+			return typeof top.count === 'number' && top.count >= members.length ? [listed] : [{ ...filter, top }, listed];
 		});
+		if (changed) touched = true;
 		return changed ? { ...ws, filters } : ws;
 	});
-	if (!issues.length) return { ir, issues };
+	if (!touched) return { ir, issues };
 	const byDs = new Map();
 	for (const [key, field] of added) {
 		const dsId = key.split('\u0000')[0];

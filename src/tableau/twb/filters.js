@@ -12,7 +12,7 @@ import { isDateLiteral, parseLiteral } from './xml.js';
  * @property {any[]} [exclude]
  * @property {{ from: any, to: any }[]} [ranges]  Shift-selected runs of members (function='range')
  * @property {boolean} [all]
- * @property {{ count: number|string, direction: 'top'|'bottom', by: string }} [top]
+ * @property {{ count: number|string, direction: 'top'|'bottom', by: string, members?: any[] }} [top]  members: the General tab's list it ranks within
  * @property {string} [expression]
  * @property {{ pattern: string, mode: 'contains'|'starts-with'|'ends-with'|'exact' }} [wildcard]
  * @property {string} [level]
@@ -131,7 +131,10 @@ export function parseGroupfilter(gf, unknown = []) {
 			const rawCount = gf.attr('count');
 			const count = rawCount !== undefined && /^-?\d+$/.test(rawCount.trim()) ? Number(rawCount) : rawCount ?? '';
 			const direction = gf.attr('end') === 'bottom' ? 'bottom' : 'top';
-			return [{ kind: 'top', top: { count, direction, by: order?.attr('expression') || '' }, level }];
+			const top = { count, direction, by: order?.attr('expression') || '' };
+			const domain = (order ?? gf).all('groupfilter').filter((c) => c.attr('function') !== 'order').flatMap((c) => parseGroupfilter(c, unknown));
+			if (domain.length === 1 && domain[0].include && !domain[0].ranges) top.members = domain[0].include;
+			return [{ kind: 'top', top, level }];
 		}
 		case 'order':
 			return children.flatMap((c) => parseGroupfilter(c, unknown));

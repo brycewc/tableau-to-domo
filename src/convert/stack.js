@@ -175,6 +175,13 @@ function filterCondition(f, member, ctx) {
 	}
 }
 
+/** The selections of a section's quick filters as card filters: the merged pivot has no quick filters to hold them. */
+function selectedControls(card) {
+	return (card.body.definition.controls ?? [])
+		.filter((c) => c.values?.length)
+		.map((c) => ({ ...(c.formulaId ? { column: c.formulaId } : { column: c.column, filterType: 'COLUMN_ID' }), operand: c.operator, values: c.values, dataType: c.type }));
+}
+
 /** A filter keyed by what it does: a card formula filter by its formula, since every card numbers its own. */
 function filterKey(f, member) {
 	const formula = (member.card.body.definition.formulas?.card ?? []).find((x) => x.id === f.column);
@@ -305,7 +312,7 @@ function mergeStack(stack, ctx, { datasetKey, keepLegacyId, rewrite, title }) {
 	const columnHeaders = headMain.columns.filter((c) => c.mapping === 'COLUMN');
 
 	const scoped = scopedCopies(members);
-	const bodyFilters = members.map((m, i) => mainOf(m.card).filters.filter((f) => !scoped.skip[i].has(JSON.stringify(f))));
+	const bodyFilters = members.map((m, i) => [...mainOf(m.card).filters.filter((f) => !scoped.skip[i].has(JSON.stringify(f))), ...selectedControls(m.card)]);
 	const keys = members.map((m, i) => bodyFilters[i].map((f) => filterKey(f, m)));
 	const shared = bodyFilters[0].filter((f, i) => keys.every((k) => k.includes(keys[0][i])));
 	const conditions = [];

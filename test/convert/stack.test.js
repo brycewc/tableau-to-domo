@@ -226,3 +226,20 @@ test('sections sharing one date range keep it on the merged card; a section with
 	other[2].body.definition.subscriptions.main.dateRangeFilter = { ...range, dateTimeRange: { ...range.dateTimeRange, count: 4 } };
 	assert.deepEqual([...findCrosstabStacks(ir, other).values()].map((s) => s.sheets), [['Dyn Open', 'Dyn Main']]);
 });
+
+test('a section quick filter selection is a filter of the merged card, which has no quick filters', () => {
+	const ir = stackIr();
+	const { cards } = planCards(ir, bindings(), { options: {} });
+	const quarters = { column: 'Quarter', filterType: 'COLUMN_ID', operand: 'IN', values: ['2022-1', '2022-2'], dataType: 'string' };
+	const slicer = (values) => ({ controlType: 'SLICER', column: 'Quarter', name: 'Quarter', type: 'string', operator: 'IN', values });
+	for (const card of cards) {
+		if (card.worksheet === 'Dyn End') card.body.definition.subscriptions.main.filters.push({ ...quarters });
+		else card.body.definition.controls = [slicer([...quarters.values])];
+	}
+	cards.find((c) => c.worksheet === 'Dyn Main').body.definition.controls.push({ ...slicer(['East']), column: 'Region', name: 'Region' });
+	const data = { datasets: [{ key: DATASET, name: 'Orders', strategy: 'upload', schema: [], fieldMap: {}, datasourceId: DS, cardTarget: true }], dataflows: [], beastModes: [beastMode('Opening', OPEN_ID), beastMode('Ending', END_ID)] };
+	const [card] = planCrosstabStacks(ir, cards, data, { workbookKey: 'wb' }).cards;
+	assert.deepEqual(card.body.definition.subscriptions.main.filters.filter((f) => f.column === 'Quarter'), [quarters], 'every section selects the same quarters');
+	const keep = data.beastModes.find((bm) => bm.key.endsWith('.stack-rows')).expression;
+	assert.match(keep, /WHEN `t2d_section` = 2 THEN CASE WHEN [^']*'Technology', 'Furniture'\) AND `Region` IN \('East'\)/, 'one section narrows its own rows');
+});

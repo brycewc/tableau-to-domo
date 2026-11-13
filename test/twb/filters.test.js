@@ -104,6 +104,20 @@ test('top N with order expression, bottom N with a parameter count', () => {
 	assert.deepEqual(bottom.top, { count: '[Parameters].[Top N]', direction: 'bottom', by: '' });
 });
 
+test('a top N keeps the hand-picked member list it ranks within', () => {
+	const [top] = filter(`<filter class='categorical' column='${DS}.[none:FY-FQ:nk]'>
+		<groupfilter count='20' end='top' function='end' units='records'>
+			<groupfilter direction='DESC' expression='COUNTD([FY-FQ])' function='order'>
+				<groupfilter function='union' user:ui-enumeration='inclusive'>
+					<groupfilter function='member' level='[none:FY-FQ:nk]' member='&quot;2022-1&quot;' />
+					<groupfilter function='member' level='[none:FY-FQ:nk]' member='&quot;2022-2&quot;' />
+				</groupfilter>
+			</groupfilter>
+		</groupfilter></filter>`);
+	assert.equal(top.kind, 'top');
+	assert.deepEqual(top.top, { count: 20, direction: 'top', by: 'COUNTD([FY-FQ])', members: ['2022-1', '2022-2'] });
+});
+
 test('condition and wildcard filters', () => {
 	const [cond] = filter(`<filter class='categorical' column='${DS}.[none:Sub:nk]'><groupfilter expression='SUM([Sales]) &gt; 1000' function='filter'><groupfilter function='level-members' /></groupfilter></filter>`);
 	assert.equal(cond.kind, 'condition');

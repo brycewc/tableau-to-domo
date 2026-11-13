@@ -30,6 +30,31 @@ test('Acme ARR: a Top 9 by COUNT of the label is the last 9 quarters, with a war
 	for (const by of ['MAX([Calculation_1])', 'MIN([Calculation_1])', 'ATTR([Calculation_1])']) assert.equal(periodTopFilters(irWith(top(by))).ir.worksheets[0].filters[0].kind, 'relative-date', by);
 });
 
+test('a Top N within a hand-picked run of quarters keeps a rolling window as long as the list, and says Tableau\'s list is fixed', () => {
+	const quarters = ['2022-1', '2022-2', '2022-3', '2022-4', '2023-1'];
+	const listed = (by, count, members) => periodTopFilters(irWith({ ...top(by, count), top: { ...top(by, count).top, members } }));
+	const { ir, issues } = listed('COUNTD([Calculation_1])', 20, quarters);
+	assert.deepEqual(ir.worksheets[0].filters[0].relative, { periodType: 'quarter', first: -5, last: -1 });
+	assert.deepEqual(issues.map((i) => [i.code, i.severity]), [['filter.period-top', 'warning']]);
+	assert.match(issues[0].message, /hand-picked list of 5 quarters \(2022-1 to 2023-1\) that only changes when someone edits it; Domo keeps the latest 5 instead/);
+	const byCount = listed('COUNT([Calculation_1])', 9, ["24'Q4", "25'Q1", "24'Q3"]);
+	assert.deepEqual(byCount.ir.worksheets[0].filters[0].relative, { periodType: 'quarter', first: -3, last: -1 }, 'an unordered list of short labels');
+	assert.doesNotMatch(byCount.issues[0].message, /row count/, 'a list no longer than the count keeps every member, whatever the ranking');
+	assert.deepEqual(listed('COUNTD([Calculation_1])', 2, quarters).ir.worksheets[0].filters[0].relative, { periodType: 'quarter', first: -2, last: -1 });
+	const gap = listed('COUNTD([Calculation_1])', 20, ['2022-1', '2022-3']);
+	assert.deepEqual(gap.ir.worksheets[0].filters[0].relative, { periodType: 'quarter', first: -20, last: -1 });
+	assert.match(gap.issues[0].message, /not consecutive/);
+});
+
+test('a Top N that is no date window ranks within its hand-picked list as an include filter', () => {
+	const sales = { id: '[Customer]', name: 'Customer', datatype: 'string', role: 'dimension', kind: 'column' };
+	const ranked = (count) => ({ pillId: `[${DS}].[none:Customer:nk]`, datasourceId: DS, fieldId: '[Customer]', kind: 'top', top: { count, direction: 'top', by: 'SUM([Sales])', members: ['A', 'B', 'C'] } });
+	const [all] = periodTopFilters(irWith(ranked(5), [sales])).ir.worksheets[0].filters;
+	assert.deepEqual([all.kind, all.include, all.top], ['categorical', ['A', 'B', 'C'], undefined], 'a top 5 of 3 members keeps them all');
+	const [two, list] = periodTopFilters(irWith(ranked(2), [sales])).ir.worksheets[0].filters;
+	assert.deepEqual([two.kind, two.top, list.kind, list.include], ['top', { count: 2, direction: 'top', by: 'SUM([Sales])' }, 'categorical', ['A', 'B', 'C']]);
+});
+
 test('a Top N on a truncated date by an aggregate of itself is a relative filter in the pill period', () => {
 	const filter = { pillId: `[${DS}].[tmn:Order Date:ok]`, datasourceId: DS, fieldId: '[Order Date]', kind: 'top', top: { count: 6, direction: 'top', by: 'MAX([Order Date])' } };
 	const { ir } = periodTopFilters(irWith(filter));

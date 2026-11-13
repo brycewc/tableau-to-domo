@@ -106,6 +106,8 @@ grow; positional parameters may not change without updating every caller.
   `except` is set difference, so an `except` child is complemented: `except(level-members, except(level-members, X))`
   (Tableau's exclude-mode double negation) is `include X`; a subtracted subtree that does not reduce to one categorical
   facet is `twb.unknown-groupfilter` instead of a silent "all".
+  A Top N (`function='end'`) over a member list (the General tab's selection under `order`) ranks within that list,
+  kept as `top.members`.
 - `TableCalcIR.secondary` (IR 7): a quick calc's second field-less `<table-calc>` (Pareto `pcto:cum`: CumTotal then
   PctTotal). Types stay in XML spelling (`Difference`, `WindowTotal`, `PctValue`); convert maps them with `quickCalcType`.
   A v6 IR with a two-calc prefix and no `secondary` gets `convert.ir-outdated`.
@@ -863,8 +865,12 @@ after each card.
   - Period Top N: a Top N (top, numeric count) on a calc joining a year and a quarter field (FY/Year, FQ/Quarter), or
     on a date column's pill (its truncation, a year part or the day), ranked by COUNTD, COUNT, MIN, MAX or ATTR of
     itself (`filter.period-top`). COUNTD ties every period and MIN/MAX order them by date; COUNT ranks by row count, which
-    in Tableau only a hand-picked list of the latest periods on the filter's General tab (not in the IR) turns into a
-    window, so it warns (a Magic ETL rank by row count keeps the busiest periods, not the latest). A label gets a new `<label> Quarter Start` calc
+    in Tableau only a hand-picked list of the latest periods on the filter's General tab (`top.members`) turns into a
+    window, so without such a list it warns (a Magic ETL rank by row count keeps the busiest periods, not the latest).
+    A list of consecutive periods sizes the window (the smaller of the count and the list) and warns that Tableau's list
+    is fixed while Domo's window moves on with new data; a list with gaps warns that the window ignores it. A Top N with
+    `top.members` that is no window becomes an include filter of the list, next to the Top N when the count is smaller
+    than the list. A label gets a new `<label> Quarter Start` calc
     (`periodDate`, the first day of the quarter's first month), always computed in Magic ETL so a card date range can
     read it.
   - A boolean calc kept True (include `[true]` or exclude `[false]`, not shown on a dashboard) that is a DATEDIFF of a
@@ -1051,7 +1057,8 @@ after each card.
     with the same names (page filter cards match them by name), keys `<key>@<stack>` and legacyIds from the stack and the old id.
   - Card (`CardPlan.stack`, key `<workbook>.stack-<sheets>`): ROW card formula `CASE WHEN t2d_section = i THEN <row i> ... END`
     (alias `' '`), the head's COLUMN headers, VALUE `CASE WHEN MAX(t2d_section) = i THEN <measure i> ... END` with the shared
-    format; bodies are inlined from the member cards. Filters every member has stay, as does a dashboard filter one member shows
+    format; bodies are inlined from the member cards. A member's quick filter selections (control values that are not view
+    defaults) count as its filters, since the merged card has no controls. Filters every member has stay, as does a dashboard filter one member shows
     and the others hold as scoped fixed copies with the same selection (it keeps `scopedFilters`, so the view default can replace
     it); the others fold into one row-level beast
     mode `<title> (section rows)` (`CASE WHEN t2d_section = i THEN <conditions> ...`, filtered IN 'true'; NOT_IN `''` is IS NOT
