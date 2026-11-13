@@ -56,6 +56,22 @@ test('updateDataflow sends a null guid for a new output so the server creates it
 	assert.equal(sent.actions[1].dataSource.guid, null);
 });
 
+test('updateDataflow matches outputs by name before the positional action id, and never sends a guid twice', async () => {
+	const { client } = testClient();
+	const live = [
+		{ type: 'PublishToVault', id: 'out-output', dataSource: { guid: 'g-a', name: 'A' } },
+		{ type: 'PublishToVault', id: 'out-output-2', dataSource: { guid: 'g-c', name: 'C' } },
+		{ type: 'PublishToVault', id: 'out-output-3', dataSource: { guid: 'g-x', name: 'Renamed' } }
+	];
+	mock = mockFetch([
+		{ method: 'GET', path: '/dataprocessing/v1/dataflows/77', json: { id: 77, actions: live } },
+		{ method: 'PUT', path: '/dataprocessing/v1/dataflows/77', json: { id: 77 } }
+	]);
+	const out = (id, name) => ({ type: 'PublishToVault', id, dataSource: { guid: '', name } });
+	await updateDataflow(client, 77, { actions: [out('out-output', 'A'), out('out-output-2', 'B'), out('out-output-3', 'C'), out('out-output-4', 'D')] });
+	assert.deepEqual(jsonBody(mock.calls[1]).actions.map((a) => a.dataSource.guid), ['g-a', null, 'g-c', null], 'B is new, C keeps its dataset at its new position');
+});
+
 test('updateDataflow unpauses a flow so push can run it', async () => {
 	const { client } = testClient();
 	mock = mockFetch([

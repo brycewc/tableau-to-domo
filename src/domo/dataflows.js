@@ -70,14 +70,22 @@ export async function updateDataflow(c, id, def, { merge = true } = {}) {
 	return c.put(`${DATAFLOWS}/${encodeURIComponent(id)}`, body);
 }
 
+// Action ids are positional (out-output-2, ...), so an output added or removed shifts them: the name decides first.
 function carryOutputGuids(actions, previous) {
 	const publishes = previous.filter((a) => a.type === 'PublishToVault' && a.dataSource?.guid);
+	const names = new Set(actions.filter((a) => a.type === 'PublishToVault').map((a) => a.dataSource?.name).filter(Boolean));
+	const used = new Set(actions.map((a) => (a.type === 'PublishToVault' ? a.dataSource?.guid : undefined)).filter(Boolean));
+	const take = (p) => (p && !used.has(p.dataSource.guid) ? (used.add(p.dataSource.guid), p.dataSource.guid) : undefined);
+	const byName = new Map();
+	for (const action of actions) {
+		if (action.type !== 'PublishToVault' || action.dataSource?.guid || !action.dataSource?.name) continue;
+		const guid = take(publishes.find((p) => p.dataSource?.name === action.dataSource.name));
+		if (guid) byName.set(action, guid);
+	}
 	return actions.map((action) => {
 		if (action.type !== 'PublishToVault' || action.dataSource?.guid) return action;
-		const match =
-			publishes.find((p) => p.id === action.id) ||
-			publishes.find((p) => p.dataSource?.name && p.dataSource.name === action.dataSource?.name);
-		return { ...action, dataSource: { ...action.dataSource, guid: match?.dataSource.guid ?? null } };
+		const guid = byName.get(action) ?? take(publishes.find((p) => p.id === action.id && !names.has(p.dataSource?.name)));
+		return { ...action, dataSource: { ...action.dataSource, guid: guid ?? null } };
 	});
 }
 
