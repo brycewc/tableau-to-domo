@@ -213,12 +213,11 @@ export async function writeLayout(c, pageId, layout, { pollIntervalMs = 1500, ti
 	return appended.length ? { ...written, appendixCardIds: appended.map((item) => String(item.cardId)) } : written;
 }
 
-/** Keys of the appendix Domo adds below a page break for cards on the page that a layout PUT leaves out. */
+/** Keys of the appendix Domo adds for cards on the page that a layout PUT leaves out: items it flags `virtualAppendix`, or anything below its first page break. */
 function appendixKeys(layout, sentKeys) {
-	const template = layout?.standard?.template || [];
-	const pageBreak = template.find((item) => item.type === 'PAGE_BREAK' && !sentKeys.has(item.contentKey));
-	if (!pageBreak) return new Set();
-	return new Set(template.filter((item) => item.y >= pageBreak.y && !sentKeys.has(item.contentKey)).map((item) => item.contentKey));
+	const template = (layout?.standard?.template || []).filter((item) => !sentKeys.has(item.contentKey));
+	const pageBreak = template.find((item) => item.type === 'PAGE_BREAK');
+	return new Set(template.filter((item) => item.virtualAppendix === true || (pageBreak && item.y >= pageBreak.y)).map((item) => item.contentKey));
 }
 
 function contentSignature(content) {

@@ -219,3 +219,17 @@ test('cards t2d did not create that Domo appends below a written layout are a wa
 		'Page "Overview" shows 1 card(s) t2d did not create in an Appendix below its layout (1000000001): they are on the page but not in the Tableau layout'
 	]);
 });
+
+test('a layout write that fails after the PUT is written again on the next push', async () => {
+	const { config } = await setup(Buffer.from('png one'));
+	await pushPlan({ config, slug: 'sales', deps: withFiles().deps, emitter: quiet });
+	const failing = withFiles();
+	failing.deps.pages.writeLayout = async () => {
+		throw new Error('Timed out waiting for layout 900 to reflect the update');
+	};
+	const failed = await pushPlan({ config, slug: 'sales', deps: failing.deps, emitter: quiet, force: true });
+	assert.equal(failed.actions.find((a) => a.kind === 'layout').status, 'failed');
+	const again = withFiles();
+	const summary = await pushPlan({ config, slug: 'sales', deps: again.deps, emitter: quiet });
+	assert.deepEqual([summary.actions.find((a) => a.kind === 'layout').action, again.calls.filter((c) => c.name === 'writeLayout').length], ['update', 1]);
+});

@@ -129,6 +129,39 @@ test('writeLayout accepts the appendix Domo adds for a card on the page that the
 	assert.ok(events.some((e) => e.type === 'warn' && /keeps 1 card\(s\).*222.*appendix/.test(e.message)));
 });
 
+test('writeLayout accepts an appendix Domo flags virtualAppendix with no page break above it', async () => {
+	const { client } = testClient();
+	const appendix = { virtual: true, virtualAppendix: true };
+	const withAppendix = {
+		layoutId: 9,
+		content: [
+			{ contentKey: 1, type: 'CARD', cardId: 111 },
+			{ contentKey: 29, type: 'HEADER', text: 'Appendix' },
+			{ contentKey: 30, type: 'CARD', cardId: 222 },
+			{ contentKey: 35, type: 'CARD', cardId: 333 }
+		],
+		standard: {
+			template: [
+				{ contentKey: 1, type: 'CARD', x: 0, y: 0, width: 30, height: 30 },
+				{ contentKey: 28, type: 'SEPARATOR', x: 0, y: 30, width: 60, height: 3, ...appendix },
+				{ contentKey: 29, type: 'HEADER', x: 0, y: 33, width: 60, height: 5, ...appendix },
+				{ contentKey: 30, type: 'CARD', x: 0, y: 38, width: 15, height: 30, ...appendix },
+				{ contentKey: 34, type: 'PAGE_BREAK', x: 0, y: 68, width: 60, height: 0, ...appendix },
+				{ contentKey: 35, type: 'CARD', x: 0, y: 68, width: 15, height: 30, ...appendix }
+			]
+		}
+	};
+	mock = mockFetch([
+		{ method: 'GET', path: '/content/v4/pages/42/layouts', json: { layoutId: 9, pageUrn: '42', content: [] } },
+		{ method: 'PUT', path: '/content/v4/pages/layouts/9/writelock', json: { layoutId: 9 } },
+		{ method: 'PUT', path: '/content/v4/pages/layouts/9', json: {} },
+		{ method: 'DELETE', path: '/content/v4/pages/layouts/9/writelock', json: true },
+		{ method: 'GET', path: '/content/v4/pages/layouts/9', repeat: true, json: withAppendix }
+	]);
+	const result = await writeLayout(client, 42, layoutPlan, { pollIntervalMs: 1, timeoutMs: 50 });
+	assert.deepEqual(result.appendixCardIds, ['222', '333']);
+});
+
 test('writeLayout still waits when a card the plan places is outside the appendix but missing', async () => {
 	const { client } = testClient();
 	mock = mockFetch([

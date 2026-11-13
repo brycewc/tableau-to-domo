@@ -2694,6 +2694,8 @@ async function pushPlanUnlocked({
 					continue;
 				}
 				const variableControls = await placeVariableControls(pageId, planned, layout.content ?? [], entry?.extra?.variableControls ?? {}, notes);
+				// The PUT may land even when writeLayout then throws, so the old hash would call the half-written layout unchanged.
+				if (entry) setEntry(state, ref, { hash: null });
 				const written = await d.pages.writeLayout(c, pageId, planned);
 				const ours = new Set(Object.entries(state.objects).filter(([r]) => r.startsWith('card:')).map(([, e]) => String(e.id)));
 				const theirs = (written?.appendixCardIds ?? []).filter((cardId) => !ours.has(cardId));
