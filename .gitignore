@@ -10,3 +10,5 @@ __pycache__/
 .claude/settings.local.json
 CLAUDE.local.md
 docs/research/
+.claude/worktrees/
+.DS_Store
