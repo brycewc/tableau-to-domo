@@ -540,11 +540,10 @@ test('publish emits script tables directly', () => {
 	assert.match(run('', undefined).blocked.reason, /nothing to publish/);
 });
 
-test('every action has a unique id and a gui position', () => {
+test('every action has a unique id', () => {
 	const r = ok(run('CREATE TEMP TABLE t AS SELECT id, region FROM orders; CREATE TEMP TABLE u AS SELECT region, COUNT(*) n FROM t GROUP BY region;', ['SELECT * FROM u', 'SELECT * FROM t']));
 	const ids = r.actions.map((a) => a.id);
 	assert.equal(new Set(ids).size, ids.length);
-	assert.ok(r.actions.every((a) => Number.isFinite(a.gui.x) && Number.isFinite(a.gui.y)));
 	assert.equal(of(r, 'PublishToVault').length, 2);
 });
 

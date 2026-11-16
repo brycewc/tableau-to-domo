@@ -106,7 +106,7 @@ test('a stack over a Magic ETL output is a second output of its dataflow', () =>
 	const flow = {
 		key: 'orders.etl',
 		name: 'Orders (Tableau calcs)',
-		definition: { actions: [{ type: 'LoadFromVault', id: 'in-source', gui: { x: 50, y: 50 } }, { type: 'ExpressionEvaluator', id: 'calc-x', dependsOn: ['in-source'], gui: { x: 270, y: 50 } }, { type: 'PublishToVault', id: 'out-output', name: 'Orders (Magic ETL calcs)', dependsOn: ['calc-x'], gui: { x: 490, y: 50 } }] },
+		definition: { actions: [{ type: 'LoadFromVault', id: 'in-source' }, { type: 'ExpressionEvaluator', id: 'calc-x', dependsOn: ['in-source'] }, { type: 'PublishToVault', id: 'out-output', name: 'Orders (Magic ETL calcs)', dependsOn: ['calc-x'] }] },
 		outputDatasetKeys: [DATASET],
 		runAfterCreate: true
 	};

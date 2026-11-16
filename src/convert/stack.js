@@ -19,8 +19,6 @@ const STRING_LITERAL = /^\s*(?:"([^"]*)"|'([^']*)')\s*$/;
 const NUMERIC = /^(numeric|long|double|decimal|integer)$/i;
 const AGGREGATE_SQL = { SUM: 'SUM', AVG: 'AVG', MIN: 'MIN', MAX: 'MAX', COUNT: 'COUNT' };
 const COMPARISONS = { EQUALS: '=', NOT_EQUALS: '<>', GREAT_THAN_EQUALS_TO: '>=', LESS_THAN_EQUALS_TO: '<=', GREATER_THAN: '>', LESS_THAN: '<' };
-const X_STEP = 220;
-const Y_STEP = 120;
 // Phoenix pivot: about 28px a header or body line, plus the card chrome.
 const PIVOT_LINE_PX = 28;
 const PIVOT_CHROME_PX = 48;
@@ -238,15 +236,10 @@ function planUnion(target, sections, { dataflows, workbookKey, slug, name, descr
 	};
 	let root;
 	let actions;
-	let y = 50;
-	let x = 50;
 	if (flow) {
 		const publish = flow.definition.actions.find((a) => a.type === 'PublishToVault' && a.name === target.dataflowOutput.outputName);
 		if (!publish?.dependsOn?.length) return undefined;
 		root = publish.dependsOn[0];
-		const rootAction = flow.definition.actions.find((a) => a.id === root);
-		x = rootAction?.gui?.x ?? x;
-		y = Math.max(...flow.definition.actions.map((a) => a.gui?.y ?? 0)) + Y_STEP;
 		actions = flow.definition.actions;
 	} else {
 		root = unique('in-source');
@@ -259,19 +252,18 @@ function planUnion(target, sections, { dataflows, workbookKey, slug, name, descr
 				executeFlowWhenUpdated: refreshesOnUpdate(target) || target.strategy === 'dataflow-output',
 				onlyLoadNewVersions: false,
 				truncateTextColumns: false,
-				truncateRows: false,
-				gui: { x, y }
+				truncateRows: false
 			}
 		];
 	}
 	const branches = sections.map((label, i) => {
 		const id = unique(`stack-${slug}-section-${i + 1}`);
-		actions.push({ type: 'ExpressionEvaluator', id, name: `Section ${i + 1}: ${label}`, dependsOn: [root], settings: { zoneId: 'UTC' }, expressions: [{ fieldName: SECTION_COLUMN, expression: String(i + 1) }], gui: { x: x + X_STEP, y: y + i * Y_STEP } });
+		actions.push({ type: 'ExpressionEvaluator', id, name: `Section ${i + 1}: ${label}`, dependsOn: [root], settings: { zoneId: 'UTC' }, expressions: [{ fieldName: SECTION_COLUMN, expression: String(i + 1) }] });
 		return id;
 	});
 	const union = unique(`stack-${slug}-union`);
-	actions.push({ type: 'UnionAll', id: union, name: 'Stack sections', dependsOn: branches, schemaSource: branches[0], unionType: 'INCLUDE_ALL', strict: false, gui: { x: x + 2 * X_STEP, y } });
-	actions.push({ type: 'PublishToVault', id: unique(`out-stack-${slug}`), name: outputName, dependsOn: [union], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE', gui: { x: x + 3 * X_STEP, y } });
+	actions.push({ type: 'UnionAll', id: union, name: 'Stack sections', dependsOn: branches, schemaSource: branches[0], unionType: 'INCLUDE_ALL', strict: false });
+	actions.push({ type: 'PublishToVault', id: unique(`out-stack-${slug}`), name: outputName, dependsOn: [union], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE' });
 	if (flow) return { flow, created: false };
 	const key = `${target.shared ? `${workbookKey}.${slugify(target.name)}` : target.key}.stack-${slug}.etl`;
 	const flowName = `${prefix}${target.name} (stacked crosstab)`;

@@ -808,8 +808,7 @@ export function planDatasets(ir, manifests, { mappings = {}, options = {}, workb
 					id: filterId,
 					name: 'Fixed datasource filters',
 					dependsOn: publish.dependsOn,
-					filterList: [{ expression: conditions.join(' AND '), andFilterList: [] }],
-					gui: { x: (publish.gui?.x ?? 0) - 110, y: (publish.gui?.y ?? 0) + 120 }
+					filterList: [{ expression: conditions.join(' AND '), andFilterList: [] }]
 				});
 				publish.dependsOn = [filterId];
 				publish.name = outputName;

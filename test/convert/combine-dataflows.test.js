@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { combineDataflows, moveDataflowsToWarehouse, useGraphEditor } from '../../src/convert/combine-dataflows.js';
+import { combineDataflows, moveDataflowsToWarehouse, layoutCanvases } from '../../src/convert/combine-dataflows.js';
 import { ref } from '../../src/util/refs.js';
 
-const load = (id, key, y = 50) => ({ type: 'LoadFromVault', id, name: key, dataSourceId: ref('dataset', key), gui: { x: 50, y } });
-const publish = (id, from, name) => ({ type: 'PublishToVault', id, name, dependsOn: [from], dataSource: { guid: '', name }, gui: { x: 490, y: 50 } });
+const load = (id, key) => ({ type: 'LoadFromVault', id, name: key, dataSourceId: ref('dataset', key) });
+const publish = (id, from, name) => ({ type: 'PublishToVault', id, name, dependsOn: [from], dataSource: { guid: '', name } });
 const output = (key, flow, name, cardTarget) => ({ key, name, strategy: 'dataflow-output', dataflowOutput: { dataflowKey: flow, outputName: name }, cardTarget, schema: [] });
 const flow = (key, actions, outputs, databaseType = 'MAGIC') => ({ key, name: key, definition: { name: key, databaseType, actions }, outputDatasetKeys: outputs, runAfterCreate: true });
 
@@ -13,9 +13,9 @@ function samplePlan() {
 		source: { workbook: 'Sales' },
 		datasets: [{ key: 'raw', strategy: 'view' }, { key: 'other', strategy: 'view' }, output('joined', 'join', 'Joined', false), output('calcs', 'calc', 'Calcs', true), output('blend', 'blend', 'Blend', true)],
 		dataflows: [
-			flow('join', [load('in-raw', 'raw'), load('in-other', 'other', 170), { type: 'MergeJoin', id: 'join', dependsOn: ['in-raw', 'in-other'], step1: 'in-raw', step2: 'in-other', gui: { x: 270, y: 50 } }, publish('out', 'join', 'Joined')], ['joined']),
-			flow('calc', [load('in-source', 'joined'), { type: 'ExpressionEvaluator', id: 'calc', dependsOn: ['in-source'], gui: { x: 270, y: 50 } }, publish('out', 'calc', 'Calcs')], ['calcs']),
-			flow('blend', [load('in-raw', 'raw'), { type: 'GroupBy', id: 'group', dependsOn: ['in-raw'], gui: { x: 270, y: 50 } }, publish('out', 'group', 'Blend')], ['blend'])
+			flow('join', [load('in-raw', 'raw'), load('in-other', 'other'), { type: 'MergeJoin', id: 'join', dependsOn: ['in-raw', 'in-other'], step1: 'in-raw', step2: 'in-other' }, publish('out', 'join', 'Joined')], ['joined']),
+			flow('calc', [load('in-source', 'joined'), { type: 'ExpressionEvaluator', id: 'calc', dependsOn: ['in-source'] }, publish('out', 'calc', 'Calcs')], ['calcs']),
+			flow('blend', [load('in-raw', 'raw'), { type: 'GroupBy', id: 'group', dependsOn: ['in-raw'] }, publish('out', 'group', 'Blend')], ['blend'])
 		],
 		cards: [{ key: 'c1', datasetKey: 'calcs', body: { dataProvider: { dataSourceId: ref('dataset', 'calcs') } } }],
 		beastModes: []
@@ -139,7 +139,7 @@ test('warehouse dataflows use the graph editor format, with one canvas tile per 
 	const plan = samplePlan();
 	plan.datasets[0] = { key: 'raw', strategy: 'cloud-amplifier', cloudAmplifier: { integrationId: 'snow' } };
 	moveDataflowsToWarehouse(plan);
-	useGraphEditor(plan);
+	layoutCanvases(plan);
 	const [magic, , adr] = plan.dataflows;
 	assert.deepEqual(magic.definition.gui ?? {}, {});
 	assert.equal(adr.definition.gui.useGraphUI, true);

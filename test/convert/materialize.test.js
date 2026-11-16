@@ -167,10 +167,10 @@ test('a join dataflow gets the tiles before its output; parameters and filters a
 		definition: {
 			name: 'Superstore (Tableau joins)',
 			actions: [
-				{ type: 'LoadFromVault', id: 'in-orders', gui: { x: 50, y: 50 } },
-				{ type: 'LoadFromVault', id: 'in-people', gui: { x: 50, y: 170 } },
-				{ type: 'MergeJoin', id: 'join-people', dependsOn: ['in-orders', 'in-people'], gui: { x: 270, y: 50 } },
-				{ type: 'PublishToVault', id: 'out-superstore', name: 'Superstore', dependsOn: ['join-people'], gui: { x: 490, y: 50 } }
+				{ type: 'LoadFromVault', id: 'in-orders' },
+				{ type: 'LoadFromVault', id: 'in-people' },
+				{ type: 'MergeJoin', id: 'join-people', dependsOn: ['in-orders', 'in-people'] },
+				{ type: 'PublishToVault', id: 'out-superstore', name: 'Superstore', dependsOn: ['join-people'] }
 			]
 		}
 	};

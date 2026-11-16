@@ -30,9 +30,6 @@ const TABLEAU_JOIN_TYPES = { inner: 'INNER', left: 'LEFT OUTER', right: 'RIGHT O
 const JOIN_KEY_FORMULAS = { DATE: { formula: (column) => `DATE(\`${column.replace(/`/g, '``')}\`)`, type: 'DATE' } };
 const ETL_SETTINGS = { zoneId: 'UTC' };
 const FUSE_TYPES = { 'INNER': 'inner', 'LEFT OUTER': 'left', 'RIGHT OUTER': 'right' };
-const X_STEP = 220;
-const Y_STEP = 120;
-const ORIGIN = 50;
 
 /** Tableau relation join attribute -> Magic ETL MergeJoin joinType. */
 export function magicJoinType(tableauJoin) {
@@ -140,7 +137,6 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 	const issues = [];
 	const usedIds = new Set();
 	const helpers = [];
-	let row = 0;
 
 	const actionId = (prefix, label) => {
 		const base = `${prefix}-${slugify(label)}`;
@@ -151,12 +147,11 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 		return id;
 	};
 
-	/** @returns {{ id: string, columns: TrackedColumn[], depth: number, y: number }} */
+	/** @returns {{ id: string, columns: TrackedColumn[] }} */
 	const build = (node) => {
 		if (node.type === 'input') {
 			const input = inputsById.get(node.tableId);
 			if (!input) throw new Error(`Join tree references unknown table ${node.tableId}`);
-			const y = ORIGIN + row++ * Y_STEP;
 			const id = actionId('in', input.name);
 			actions.push({
 				type: 'LoadFromVault',
@@ -166,14 +161,12 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 				executeFlowWhenUpdated: Boolean(input.refreshed),
 				onlyLoadNewVersions: false,
 				truncateTextColumns: false,
-				truncateRows: false,
-				gui: { x: ORIGIN, y }
+				truncateRows: false
 			});
-			return { id, columns: inputColumns(input), depth: 0, y };
+			return { id, columns: inputColumns(input) };
 		}
 		if (node.type === 'union') {
 			const children = node.children.map(build);
-			const depth = Math.max(...children.map((c) => c.depth)) + 1;
 			const id = actionId('union', leftmostLabel(node, inputsById));
 			actions.push({
 				type: 'UnionAll',
@@ -182,10 +175,9 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 				dependsOn: children.map((c) => c.id),
 				schemaSource: children[0].id,
 				unionType: 'INCLUDE_ALL',
-				strict: false,
-				gui: { x: ORIGIN + depth * X_STEP, y: children[0].y }
+				strict: false
 			});
-			return { id, columns: unionColumns(children.map((c) => c.columns)), depth, y: children[0].y };
+			return { id, columns: unionColumns(children.map((c) => c.columns)) };
 		}
 		let left = build(node.left);
 		let right = build(node.right);
@@ -218,13 +210,12 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 			const exprs = computed[side];
 			if (!exprs.length) return built;
 			const id = actionId('keys', `${label} ${side}`);
-			actions.push({ type: 'ExpressionEvaluator', id, name: `Join keys of ${side === 'left' ? 'joined rows' : label}`, dependsOn: [built.id], settings: { ...ETL_SETTINGS }, expressions: exprs.map(({ fieldName, expression }) => ({ fieldName, expression })), gui: { x: ORIGIN + Math.round((built.depth + 0.5) * X_STEP), y: built.y } });
+			actions.push({ type: 'ExpressionEvaluator', id, name: `Join keys of ${side === 'left' ? 'joined rows' : label}`, dependsOn: [built.id], settings: { ...ETL_SETTINGS }, expressions: exprs.map(({ fieldName, expression }) => ({ fieldName, expression })) });
 			return { ...built, id, columns: [...built.columns, ...exprs.map((e) => ({ name: e.fieldName, type: e.type, origins: [] }))] };
 		};
 		left = withKeys('left', left);
 		right = withKeys('right', right);
 		const { columns, modifications } = mergeColumns(left.columns, right.columns, keyPairs, node.joinType, label);
-		const depth = Math.max(left.depth, right.depth) + 1;
 		const id = actionId('join', label);
 		actions.push({
 			type: 'MergeJoin',
@@ -237,18 +228,17 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 			keys1: keyPairs.map((p) => p.left),
 			keys2: keyPairs.map((p) => p.right),
 			schemaModification1: [],
-			schemaModification2: modifications,
-			gui: { x: ORIGIN + depth * X_STEP, y: left.y }
+			schemaModification2: modifications
 		});
-		return { id, columns, depth, y: left.y };
+		return { id, columns };
 	};
 
 	let root = build(tree);
 	if (helpers.length) {
 		const id = actionId('drop', 'join keys');
-		actions.push({ type: 'Metadata', id, name: 'Drop join keys', dependsOn: [root.id], fields: helpers.map((name) => ({ name, remove: true })), gui: { x: ORIGIN + (root.depth + 1) * X_STEP, y: root.y } });
+		actions.push({ type: 'Metadata', id, name: 'Drop join keys', dependsOn: [root.id], fields: helpers.map((name) => ({ name, remove: true })) });
 		const dropped = new Set(helpers);
-		root = { ...root, id, depth: root.depth + 1, columns: root.columns.filter((c) => !dropped.has(c.name)) };
+		root = { ...root, id, columns: root.columns.filter((c) => !dropped.has(c.name)) };
 	}
 	actions.push({
 		type: 'PublishToVault',
@@ -256,8 +246,7 @@ export function buildJoinDataflow({ name, outputName, description = '', inputs, 
 		name: outputName,
 		dependsOn: [root.id],
 		dataSource: { guid: '', name: outputName, description },
-		versionChainType: 'REPLACE',
-		gui: { x: ORIGIN + (root.depth + 1) * X_STEP, y: root.y }
+		versionChainType: 'REPLACE'
 	});
 
 	const definition = {

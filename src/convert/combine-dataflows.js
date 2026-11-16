@@ -1,8 +1,7 @@
+import { graphCanvas, layoutTiles } from '../magic/canvas.js';
 import { sqlToMagic } from '../magic/index.js';
 import { isRef } from '../util/refs.js';
 import { slugify } from '../util/ids.js';
-
-const Y_GAP = 240;
 
 const engineOf = (df) => `${df.definition?.databaseType ?? 'MAGIC'}\u0000${df.definition?.computeCloud ?? ''}`;
 const loadKey = (a) => (a.type === 'LoadFromVault' && isRef(a.dataSourceId) && a.dataSourceId.$ref.startsWith('dataset:') ? a.dataSourceId.$ref.slice(8) : null);
@@ -169,7 +168,6 @@ function mergeGroup(flows, plan, workbookKey) {
 	const actions = [];
 	const publishedKey = new Map();
 	const publishTile = new Map();
-	let yOffset = 0;
 	for (const df of flows) {
 		const rename = new Map();
 		let own = df.definition.actions;
@@ -186,10 +184,8 @@ function mergeGroup(flows, plan, workbookKey) {
 			tileNames.add(name);
 			if (name !== a.name) own = renameInSql(own, a.name, name).map((x) => (x.id === a.id ? { ...x, name } : x));
 		}
-		let bottom = 0;
 		for (const a of own) {
-			const moved = { ...relink(a, (d) => rename.get(d) ?? d), id: rename.get(a.id), ...(a.gui ? { gui: { ...a.gui, y: (a.gui.y ?? 0) + yOffset } } : {}) };
-			bottom = Math.max(bottom, moved.gui?.y ?? 0);
+			const moved = { ...relink(a, (d) => rename.get(d) ?? d), id: rename.get(a.id) };
 			if (a.type === 'PublishToVault') {
 				const key = datasetKeyOf(df, a, datasetByKey);
 				publishedKey.set(moved.id, key);
@@ -197,7 +193,6 @@ function mergeGroup(flows, plan, workbookKey) {
 			}
 			actions.push(moved);
 		}
-		yOffset = bottom + Y_GAP;
 	}
 
 	const replace = new Map();
@@ -280,14 +275,15 @@ function usedOutside(plan, keys) {
 }
 
 /**
- * Warehouse dataflows in the Magic ETL graph editor's format. Without `useGraphUI` Domo runs an ADR flow in its legacy
- * mode, where a Snowflake-dialect SQL tile fails (it cannot find its inputs by tile name; live-checked).
+ * Lays out every dataflow's tiles, and puts warehouse dataflows in the Magic ETL graph editor's format. Without
+ * `useGraphUI` Domo runs an ADR flow in its legacy mode, where a Snowflake-dialect SQL tile fails (it cannot find its
+ * inputs by tile name; live-checked).
  * @param {import('../model/types.js').DomoPlan} plan
  */
-export function useGraphEditor(plan) {
+export function layoutCanvases(plan) {
 	for (const df of plan.dataflows ?? []) {
-		if (df.definition?.databaseType !== 'ADR') continue;
-		const elements = df.definition.actions.map((a) => ({ id: a.id, type: 'Tile', x: a.gui?.x ?? 0, y: a.gui?.y ?? 0, color: null, colorSource: null }));
-		df.definition.gui = { version: '1.0', useGraphUI: true, canvases: { default: { canvasSettings: { coarserGrid: true, hideCoarserGridPopUp: false }, disabledActions: [], elements } } };
+		if (!df.definition?.actions) continue;
+		df.definition.actions = layoutTiles(df.definition.actions);
+		if (df.definition.databaseType === 'ADR') df.definition.gui = graphCanvas(df.definition.actions);
 	}
 }

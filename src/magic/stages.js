@@ -88,8 +88,7 @@ export function splitDefinition(definition, opts = {}) {
 		for (const id of carried) {
 			const name = intermediateName(id, k);
 			carriedName.set(id, name);
-			const from = byId.get(id);
-			stageActions.push({ type: 'PublishToVault', id: `out-step-${id}`.slice(0, 120), name, dependsOn: [id], dataSource: { guid: '', name, description: '', type: 'DataFlow', ...(definition.computeCloud ? { cloudId: definition.computeCloud } : {}) }, versionChainType: 'REPLACE', gui: { x: from.gui.x + 220, y: from.gui.y } });
+			stageActions.push({ type: 'PublishToVault', id: `out-step-${id}`.slice(0, 120), name, dependsOn: [id], dataSource: { guid: '', name, description: '', type: 'DataFlow', ...(definition.computeCloud ? { cloudId: definition.computeCloud } : {}) }, versionChainType: 'REPLACE' });
 			outputs.push({ name, columns: opts.columnsOf?.(id) ?? null, intermediate: true, actionId: `out-step-${id}`.slice(0, 120) });
 		}
 		for (const p of finals) {
@@ -111,7 +110,6 @@ function stageLoad(tile, dataSourceId, definition) {
 		onlyLoadNewVersions: false,
 		truncateTextColumns: false,
 		truncateRows: false,
-		...(adr ? { settings: { preferredDatabaseEntityType: 'TEMP_VIEW' }, sourceType: 'AUTO', filterPolicy: 'LEGACY' } : {}),
-		gui: { ...tile.gui }
+		...(adr ? { settings: { preferredDatabaseEntityType: 'TEMP_VIEW' }, sourceType: 'AUTO', filterPolicy: 'LEGACY' } : {})
 	};
 }

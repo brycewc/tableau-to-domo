@@ -15,10 +15,6 @@ import { slugify } from '../util/ids.js';
  * @property {string} [zoneId]           Formula/Group By time zone (default UTC)
  */
 
-const X_STEP = 220;
-const Y_STEP = 120;
-const ORIGIN = 50;
-
 const FRAMED_OPERATIONS = { SUM: 'SUM', AVG: 'AVERAGE', COUNT: 'COUNT' };
 
 /**
@@ -40,15 +36,6 @@ export function buildDefinition(graph, planned, opts = {}) {
 	const merged = mergeSelects(graph.nodes.filter((n) => reachable.has(n)), planned);
 	const nodes = distinctInputs(merged.nodes);
 	const outputs = merged.outputs;
-	const depth = new Map();
-	const depthOf = (n) => {
-		if (depth.has(n)) return depth.get(n);
-		const d = n.deps.length ? Math.max(...n.deps.map(depthOf)) + 1 : 0;
-		depth.set(n, d);
-		return d;
-	};
-	nodes.forEach(depthOf);
-	const rows = new Map();
 	const used = new Set();
 	const ids = new Map();
 	const idFor = (n) => {
@@ -61,12 +48,6 @@ export function buildDefinition(graph, planned, opts = {}) {
 		used.add(id);
 		ids.set(n.id, id);
 		return id;
-	};
-	const gui = (n) => {
-		const d = depth.get(n);
-		const row = rows.get(d) ?? 0;
-		rows.set(d, row + 1);
-		return { x: ORIGIN + d * X_STEP, y: ORIGIN + row * Y_STEP };
 	};
 	const names = new Set();
 	const nameFor = (n) => {
@@ -83,13 +64,12 @@ export function buildDefinition(graph, planned, opts = {}) {
 	for (const n of nodes) {
 		const id = idFor(n);
 		const dependsOn = n.deps.map(idFor);
-		const base = { type: '', id, name: nameFor(n), ...(dependsOn.length ? { dependsOn } : {}), gui: gui(n) };
+		const base = { type: '', id, name: nameFor(n), ...(dependsOn.length ? { dependsOn } : {}) };
 		if (new Set(dependsOn).size !== dependsOn.length) throw new Error(`Tile ${id} (${n.op}) reads the same action twice (${dependsOn.join(', ')}); Magic ETL rejects that at run time`);
 		const clash = duplicateName(n.columns);
 		if (clash) throw new Error(`Tile ${id} (${n.op}) outputs the column ${clash[0]} and ${clash[1]}, which ADR treats as one name; it rejects that at run time`);
 		actions.push(tile(n, base, dependsOn, { adr, zone }));
 	}
-	let row = 0;
 	for (const o of outputs) {
 		const from = idFor(o.node);
 		const base = `out-${slugify(o.name).slice(0, 40)}`;
@@ -103,8 +83,7 @@ export function buildDefinition(graph, planned, opts = {}) {
 			name: o.name,
 			dependsOn: [from],
 			dataSource: { guid: '', name: o.name, description: opts.description ?? '', type: 'DataFlow', ...(adr ? { cloudId: opts.compute.cloudId } : {}) },
-			versionChainType: 'REPLACE',
-			gui: { x: ORIGIN + (Math.max(0, ...depth.values()) + 1) * X_STEP, y: ORIGIN + row++ * Y_STEP }
+			versionChainType: 'REPLACE'
 		});
 	}
 	const definition = {

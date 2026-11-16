@@ -43,8 +43,6 @@ const MAX_SWITCHED_RANKS = 12;
 const TABLEAU_TYPES = { LONG: 'integer', DOUBLE: 'real', DECIMAL: 'real', STRING: 'string', DATE: 'date', DATETIME: 'datetime' };
 // Magic ETL formulas default to the instance time zone; Beast Mode evaluates dates in UTC.
 const ETL_SETTINGS = { zoneId: 'UTC' };
-const X_STEP = 220;
-const Y_STEP = 120;
 
 const lodKey = (node) => JSON.stringify(node, (k, v) => (k === 'pos' ? undefined : v));
 // The null-safe join key of a ranked dimension: Tableau ranks Null as a member, and a Magic ETL join never matches nulls.
@@ -492,7 +490,7 @@ function conform(translation, unit) {
  * Translate the units of one datasource in dependency order and append their tiles after `sourceId`.
  * @returns {{ actions: Object[], last: string, columns: Map<string, { column: string, domoType: string, datatype: string }>, rejected: Map<string, string>, issues: Issue[] }}
  */
-function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, preset = new Map() }) {
+function buildTiles({ units, an, target, rawBoolean, sourceId, usedIds, preset = new Map() }) {
 	const actions = [];
 	const columns = new Map();
 	const known = (id) => columns.get(id) ?? preset.get(id);
@@ -549,11 +547,9 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 	const failure = (r) => r.issues.filter((i) => i.severity === 'error').map((i) => i.message).join('; ');
 
 	let current = sourceId;
-	let x = gui.x;
 	const helpers = new Map();
-	const tile = (action, dy = 0) => {
-		if (!dy) x += X_STEP;
-		actions.push({ ...action, gui: { x, y: gui.y + dy } });
+	const tile = (action) => {
+		actions.push(action);
 		return action.id;
 	};
 
@@ -648,12 +644,10 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 			giveBackRow: false,
 			allRows: false,
 			groups: keys.map((name) => ({ name })),
-			fields: [...values].map(([expression, name]) => ({ name, expression })),
-			gui: { x: x + X_STEP, y: gui.y + Y_STEP }
+			fields: [...values].map(([expression, name]) => ({ name, expression }))
 		});
 		let step = groupId;
 		for (const w of windows.values()) {
-			x += X_STEP;
 			const id = actionId('window', w.label);
 			actions.push({
 				type: 'WindowAction',
@@ -662,12 +656,10 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 				dependsOn: [step],
 				groupRules: w.groupRules,
 				orderRules: w.orderRules,
-				additions: w.additions,
-				gui: { x: x + X_STEP, y: gui.y + Y_STEP }
+				additions: w.additions
 			});
 			step = id;
 		}
-		x += X_STEP;
 		current = tile({
 			type: 'MergeJoin',
 			id: actionId('join', label),
@@ -789,9 +781,8 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 		let step = current;
 		if (conditions.length) {
 			const id = actionId('filter', `${label} rank`);
-			actions.push({ type: 'Filter', id, name: `Rows ranked for ${label}`, dependsOn: [current], filterList: [{ expression: conditions.join(' AND '), andFilterList: [] }], gui: { x: x + X_STEP, y: gui.y + Y_STEP } });
+			actions.push({ type: 'Filter', id, name: `Rows ranked for ${label}`, dependsOn: [current], filterList: [{ expression: conditions.join(' AND '), andFilterList: [] }] });
 			step = id;
-			x += X_STEP;
 		}
 		const groupId = actionId('group', `${label} rank`);
 		actions.push({
@@ -804,10 +795,8 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 			giveBackRow: false,
 			allRows: false,
 			groups: joinKeys.map((name) => ({ name })),
-			fields: variants.map((v) => ({ name: v.valueColumn, expression: v.expression })),
-			gui: { x: x + X_STEP, y: gui.y + Y_STEP }
+			fields: variants.map((v) => ({ name: v.valueColumn, expression: v.expression }))
 		});
-		x += X_STEP;
 		let windowId = groupId;
 		for (const v of variants) {
 			const id = actionId('window', `${label} rank${v.label === undefined ? '' : ` ${v.label}`}`);
@@ -818,11 +807,9 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 				dependsOn: [windowId],
 				groupRules: partitionKeys.map((column) => ({ column, caseSensitive: false })),
 				orderRules: [{ column: v.valueColumn, caseSensitive: false, ascending: top.ascending }],
-				additions: [{ name: v.column, operation: { type: 'RANKING', operationType: 'RANK' } }],
-				gui: { x: x + X_STEP, y: gui.y + Y_STEP }
+				additions: [{ name: v.column, operation: { type: 'RANKING', operationType: 'RANK' } }]
 			});
 			windowId = id;
-			x += X_STEP;
 		}
 		current = tile({
 			type: 'MergeJoin',
@@ -914,8 +901,7 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 			giveBackRow: false,
 			allRows: false,
 			groups: keys.map((name) => ({ name })),
-			fields: [{ name: column, expression: value.expression }],
-			gui: { x: x + X_STEP, y: gui.y + Y_STEP }
+			fields: [{ name: column, expression: value.expression }]
 		});
 		current = tile({
 			type: 'MergeJoin',
@@ -930,14 +916,13 @@ function buildTiles({ units, an, target, rawBoolean, sourceId, gui, usedIds, pre
 			schemaModification1: [],
 			schemaModification2: keys.map((name) => ({ name, rename: name, remove: true }))
 		});
-		x += X_STEP;
 		columns.set(unit.id, { column, domoType: value.domoType, datatype: value.datatype, keys });
 		issues.push(...body.issues.filter((i) => i.severity === 'warning'));
 	}
 	if (helpers.size) {
 		current = tile({ type: 'Metadata', id: actionId('drop', 'keys'), name: 'Drop key columns', dependsOn: [current], fields: [...helpers.values()].map((name) => ({ name, remove: true })) });
 	}
-	return { actions, last: current, columns, rejected, issues, x };
+	return { actions, last: current, columns, rejected, issues };
 }
 
 /**
@@ -1002,14 +987,14 @@ function applyUnits(ir, data, unitsByDs, analyzers, { workbookKey, options }) {
 		let flow;
 		let output;
 		let publish;
-		let source;
+		let sourceId;
 		const usedIds = new Set();
 		if (inFlow) {
 			flow = inFlow;
 			flow.definition.actions.forEach((a) => usedIds.add(a.id));
 			publish = flow.definition.actions.find((a) => a.type === 'PublishToVault' && a.name === target.dataflowOutput.outputName) ?? flow.definition.actions.find((a) => a.type === 'PublishToVault');
 			const root = flow.definition.actions.find((a) => a.id === publish.dependsOn[0]);
-			source = { id: root.id, gui: { x: root.gui?.x ?? 50, y: root.gui?.y ?? 50 } };
+			sourceId = root.id;
 			output = target;
 		} else {
 			const key = target.shared ? `${workbookKey}.${slugify(caption)}.etl` : `${target.key}.etl`;
@@ -1023,11 +1008,10 @@ function applyUnits(ir, data, unitsByDs, analyzers, { workbookKey, options }) {
 				executeFlowWhenUpdated: refreshesOnUpdate(target),
 				onlyLoadNewVersions: false,
 				truncateTextColumns: false,
-				truncateRows: false,
-				gui: { x: 50, y: 50 }
+				truncateRows: false
 			};
 			usedIds.add(load.id);
-			publish = { type: 'PublishToVault', id: 'out-output', name: outputName, dependsOn: [load.id], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE', gui: { x: 270, y: 50 } };
+			publish = { type: 'PublishToVault', id: 'out-output', name: outputName, dependsOn: [load.id], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE' };
 			usedIds.add(publish.id);
 			flow = {
 				key,
@@ -1048,10 +1032,10 @@ function applyUnits(ir, data, unitsByDs, analyzers, { workbookKey, options }) {
 				cardTarget: true,
 				fieldMap: { ...target.fieldMap }
 			};
-			source = { id: load.id, gui: load.gui };
+			sourceId = load.id;
 		}
 
-		const built = buildTiles({ units, an, target: output, rawBoolean, sourceId: source.id, gui: source.gui, usedIds, preset });
+		const built = buildTiles({ units, an, target: output, rawBoolean, sourceId, usedIds, preset });
 		rejected.set(ds.id, built.rejected);
 		issues.push(...built.issues);
 		if (!built.columns.size) {
@@ -1061,7 +1045,7 @@ function applyUnits(ir, data, unitsByDs, analyzers, { workbookKey, options }) {
 		if (inFlow) inherited.set(ds.id, new Map([...built.columns].filter(([id]) => units.get(id)?.kind !== 'window' && units.get(id)?.kind !== 'top')));
 
 		const actions = flow.definition.actions.filter((a) => a !== publish);
-		actions.push(...built.actions, { ...publish, dependsOn: [built.last], gui: { x: built.x + X_STEP, y: source.gui.y } });
+		actions.push(...built.actions, { ...publish, dependsOn: [built.last] });
 		flow.definition.actions = actions;
 		if (!inFlow) {
 			target.cardTarget = false;

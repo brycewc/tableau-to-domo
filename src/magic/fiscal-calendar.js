@@ -1,4 +1,5 @@
 import { fiscalStartName } from '../convert/fiscal.js';
+import { graphCanvas, layoutTiles } from './canvas.js';
 
 /** Years Domo's StandardCalendar covers on a Cloud Amplifier device (live-checked: 1990-01-01 to 2074-12-31). */
 export const CALENDAR_YEARS = { from: 1990, to: 2074 };
@@ -83,18 +84,17 @@ export const calendarDatasetName = (startMonth) => `t2d Fiscal Calendar (${fisca
  */
 export function fiscalCalendarDataflow({ integrationId, integrationName, startMonth, source, table }) {
 	const name = calendarDatasetName(startMonth);
-	const actions = [
-		{ type: 'SQL', id: 'sql-fiscal-calendar', name: 't2d_FISCAL_CALENDAR', inputs: [], settings: { sqlDialect: 'SNOWFLAKE', preferredDatabaseEntityType: 'TEMP_VIEW' }, statements: [source ? sourceCalendarSql(source) : fiscalCalendarSql(startMonth)], gui: { x: 50, y: 50 } },
+	const actions = layoutTiles([
+		{ type: 'SQL', id: 'sql-fiscal-calendar', name: 't2d_FISCAL_CALENDAR', inputs: [], settings: { sqlDialect: 'SNOWFLAKE', preferredDatabaseEntityType: 'TEMP_VIEW' }, statements: [source ? sourceCalendarSql(source) : fiscalCalendarSql(startMonth)] },
 		{
 			type: 'PublishToVault',
 			id: 'out-fiscal-calendar',
 			name,
 			dependsOn: ['sql-fiscal-calendar'],
 			dataSource: { guid: '', name, description: `Fiscal year starts ${fiscalStartName(startMonth)} 1 and is named by the year it ends.`, type: 'DataFlow', cloudId: integrationId, ...(table ? { schemaMapping: { database: table.database, schemaName: table.schema, tableName: table.table } } : {}) },
-			versionChainType: 'REPLACE',
-			gui: { x: 270, y: 50 }
+			versionChainType: 'REPLACE'
 		}
-	];
+	]);
 	return {
 		name: source ? `t2d fiscal calendar (${source.table})` : `t2d fiscal calendar (${fiscalStartName(startMonth)} start)`,
 		description: `Fiscal calendar for Cloud Amplifier integration ${integrationName ?? integrationId}, ${source ? `read from ${source.table} in Domo's calendar columns` : `generated in its warehouse for ${CALENDAR_YEARS.from} through ${CALENDAR_YEARS.to}`}. t2d registered its output as the integration's fiscal calendar, so keep it.`,
@@ -103,11 +103,7 @@ export function fiscalCalendarDataflow({ integrationId, integrationName, startMo
 		settings: { sqlDialect: 'ADRENALINE' },
 		runState: 'ENABLED',
 		engineProperties: { 'kettle.mode': 'STRICT' },
-		gui: {
-			version: '1.0',
-			useGraphUI: true,
-			canvases: { default: { canvasSettings: { coarserGrid: true, hideCoarserGridPopUp: false }, disabledActions: [], elements: actions.map((a) => ({ id: a.id, type: 'Tile', x: a.gui.x, y: a.gui.y, color: null, colorSource: null })) } }
-		},
+		gui: graphCanvas(actions),
 		actions
 	};
 }

@@ -33,8 +33,6 @@ const REAGGREGATE = { SUM: 'SUM', COUNT: 'SUM', COUNTD: 'SUM', AVG: 'AVG', MIN: 
 const PILL_AGGREGATES = { sum: 'SUM', avg: 'AVG', cnt: 'COUNT', ctd: 'COUNTD', min: 'MIN', max: 'MAX', med: 'MEDIAN', stdev: 'STDEV', stdevp: 'STDEVP', var: 'VAR', varp: 'VARP' };
 const TABLEAU_TYPES = { LONG: 'integer', DOUBLE: 'real', DECIMAL: 'real', STRING: 'string', DATE: 'date', DATETIME: 'datetime' };
 const ETL_SETTINGS = { zoneId: 'UTC' };
-const X_STEP = 220;
-const Y_STEP = 120;
 
 function children(node) {
 	switch (node?.type) {
@@ -802,7 +800,7 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 		usedIds.add(id);
 		return id;
 	};
-	const load = (dataset, gui) => ({
+	const load = (dataset) => ({
 		type: 'LoadFromVault',
 		id: actionId('in', dataset.name),
 		name: dataset.name,
@@ -810,14 +808,12 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 		executeFlowWhenUpdated: refreshesOnUpdate(dataset),
 		onlyLoadNewVersions: false,
 		truncateTextColumns: false,
-		truncateRows: false,
-		gui
+		truncateRows: false
 	});
 	const actions = [];
-	const primaryLoad = load(primaryTarget, { x: 50, y: 50 });
+	const primaryLoad = load(primaryTarget);
 	actions.push(primaryLoad);
 	let current = primaryLoad.id;
-	let x = 50;
 	const fieldMap = { ...(primaryTarget.fieldMap ?? {}) };
 	const schema = (primaryTarget.schema ?? []).map((c) => ({ ...c }));
 	const helpers = [];
@@ -929,13 +925,12 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 			issues.push(issue('warning', 'blend.secondary-filter', `The fixed filters on '${secondary.caption}' could not be applied inside ${unfiltered.join(', ')} (it aggregates through other calcs), so those values cover every secondary row`, { type: 'datasource', name: secondary.caption, id: secondary.id }));
 		}
 		if (!groupFields.length) continue;
-		const y = 50 + (index + 1) * Y_STEP * 2;
-		const sLoad = load(target, { x: 50, y });
+		const sLoad = load(target);
 		actions.push(sLoad);
 		let sCurrent = sLoad.id;
 		if (sHelpers.length) {
 			sCurrent = actionId('keys', secondary.caption);
-			actions.push({ type: 'ExpressionEvaluator', id: sCurrent, name: `Link keys of ${secondary.caption}`, dependsOn: [sLoad.id], settings: { ...ETL_SETTINGS }, expressions: sHelpers, gui: { x: 50 + X_STEP, y } });
+			actions.push({ type: 'ExpressionEvaluator', id: sCurrent, name: `Link keys of ${secondary.caption}`, dependsOn: [sLoad.id], settings: { ...ETL_SETTINGS }, expressions: sHelpers });
 		}
 		const groupId = actionId('group', secondary.caption);
 		actions.push({
@@ -948,17 +943,14 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 			giveBackRow: false,
 			allRows: false,
 			groups: keys2.map((name) => ({ name })),
-			fields: groupFields,
-			gui: { x: 50 + 2 * X_STEP, y }
+			fields: groupFields
 		});
 		if (pHelpers.length) {
-			x += X_STEP;
 			const id = actionId('keys', primary.caption);
-			actions.push({ type: 'ExpressionEvaluator', id, name: `Link keys of ${primary.caption}`, dependsOn: [current], settings: { ...ETL_SETTINGS }, expressions: pHelpers, gui: { x, y: 50 } });
+			actions.push({ type: 'ExpressionEvaluator', id, name: `Link keys of ${primary.caption}`, dependsOn: [current], settings: { ...ETL_SETTINGS }, expressions: pHelpers });
 			current = id;
 			helpers.push(...pHelpers.map((h) => h.fieldName));
 		}
-		x = Math.max(x, 50 + 2 * X_STEP) + X_STEP;
 		const joinId = actionId('join', secondary.caption);
 		actions.push({
 			type: 'MergeJoin',
@@ -971,14 +963,12 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 			keys1,
 			keys2,
 			schemaModification1: [],
-			schemaModification2: keys2.map((name) => ({ name, rename: name, remove: true })),
-			gui: { x, y: 50 }
+			schemaModification2: keys2.map((name) => ({ name, rename: name, remove: true }))
 		});
 		current = joinId;
 		if (onceColumns.length) {
 			// Each link value is kept on one row of its link group, so cards can re-aggregate per-link values without repeats.
 			const row = uniqueName(`_t2d_link_row_${index + 1}`, taken);
-			x += X_STEP;
 			const windowId = actionId('window', secondary.caption);
 			actions.push({
 				type: 'WindowAction',
@@ -987,10 +977,8 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 				dependsOn: [current],
 				groupRules: [...keys1, ...grainKeys].map((column) => ({ column, caseSensitive: false })),
 				orderRules: [...keys1, ...grainKeys].map((column) => ({ column, caseSensitive: false, ascending: true })),
-				additions: [{ name: row, operation: { type: 'RANKING', operationType: 'ROW_NUMBER' } }],
-				gui: { x, y: 50 }
+				additions: [{ name: row, operation: { type: 'RANKING', operationType: 'ROW_NUMBER' } }]
 			});
-			x += X_STEP;
 			const onceId = actionId('once', secondary.caption);
 			actions.push({
 				type: 'ExpressionEvaluator',
@@ -998,8 +986,7 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 				name: `${secondary.caption} once per link`,
 				dependsOn: [windowId],
 				settings: { ...ETL_SETTINGS },
-				expressions: onceColumns.map((c) => ({ fieldName: c.output, expression: `CASE WHEN \`${row}\` = 1 THEN \`${c.value}\` END` })),
-				gui: { x, y: 50 }
+				expressions: onceColumns.map((c) => ({ fieldName: c.output, expression: `CASE WHEN \`${row}\` = 1 THEN \`${c.value}\` END` }))
 			});
 			current = onceId;
 			helpers.push(row, ...onceColumns.map((c) => c.value));
@@ -1008,12 +995,11 @@ function buildGroup(group, { ir, targetOf, graphOf, workbookKey, prefix }) {
 	}
 	if (!joinedLabels.length) return { ok: false, issues };
 	if (helpers.length) {
-		x += X_STEP;
 		const id = actionId('drop', 'link keys');
-		actions.push({ type: 'Metadata', id, name: 'Drop link keys', dependsOn: [current], fields: helpers.map((name) => ({ name, remove: true })), gui: { x, y: 50 } });
+		actions.push({ type: 'Metadata', id, name: 'Drop link keys', dependsOn: [current], fields: helpers.map((name) => ({ name, remove: true })) });
 		current = id;
 	}
-	actions.push({ type: 'PublishToVault', id: 'out-output', name: outputName, dependsOn: [current], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE', gui: { x: x + X_STEP, y: 50 } });
+	actions.push({ type: 'PublishToVault', id: 'out-output', name: outputName, dependsOn: [current], dataSource: { guid: '', name: outputName, description }, versionChainType: 'REPLACE' });
 
 	const flowName = `${prefix}${caption} (Tableau blend)`;
 	const dataflow = {

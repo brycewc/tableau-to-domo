@@ -1,4 +1,4 @@
-import { combineDataflows, moveDataflowsToWarehouse, useGraphEditor } from './combine-dataflows.js';
+import { combineDataflows, moveDataflowsToWarehouse, layoutCanvases } from './combine-dataflows.js';
 import { warehouseBackreferences, warehouseSafeSorts } from './warehouse-sorts.js';
 import { IR_VERSION, PLAN_VERSION } from '../model/types.js';
 import { slugify } from '../util/ids.js';
@@ -476,7 +476,7 @@ export function convertWorkbook(ir, { manifests = [], mappings = {}, options = {
 	}
 	if (resolved.warehouseDataflows !== false) plan.issues.push(...moveDataflowsToWarehouse(plan));
 	if (resolved.combineDataflows !== false) plan.issues.push(...combineDataflows(plan, { workbookKey }));
-	useGraphEditor(plan);
+	layoutCanvases(plan);
 	plan.issues.push(...warehouseSafeSorts(plan));
 	warehouseBackreferences(plan);
 	formatPlanSql(plan);

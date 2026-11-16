@@ -184,7 +184,6 @@ test('multi-table relationships become a Magic ETL join dataflow', () => {
 	assert.equal(j2.step1, j1.id);
 	assert.deepEqual(j2.keys1, ['Order ID']);
 	assert.deepEqual(j2.schemaModification2, [{ name: 'Order ID', rename: 'Order ID', remove: true }]);
-	assert.ok(j2.gui.x > j1.gui.x);
 
 	const [out] = byType('PublishToVault');
 	assert.deepEqual(out.dependsOn, [j2.id]);
